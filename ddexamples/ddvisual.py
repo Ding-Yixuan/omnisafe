@@ -32,7 +32,7 @@ def patched_init(self, config):
     
     # 修改环境: 2 Hazards
     self.placements_conf.extents = [-1.5, -1.5, 1.5, 1.5]
-    self._add_geoms(Hazards(num=2, keepout=0.18))
+    self._add_geoms(Hazards(num=2, keepout=0.2))
     print("【Patch】环境地图已修改: 2 Hazards")
 
 def patched_build_observation_space(self):
@@ -90,7 +90,7 @@ def find_actor(obj, depth=0):
 
 # ================= 配置区域 =================
 # 请确保这里指向你训练好的模型文件夹
-LOG_DIR = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-09-17-49-50'
+LOG_DIR = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-10-21-13-01'
 # runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-07-19-09-38
 VIDEO_FILENAME = "safe_navigation_26dim.mp4"
 MAX_STEPS = 2000  

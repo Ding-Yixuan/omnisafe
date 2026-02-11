@@ -24,7 +24,7 @@ def patched_init(self, config):
     GoalLevel0.__init__(self, config=config)
     # 扩大一点地图范围，防止刷在墙外
     self.placements_conf.extents = [-1.5, -1.5, 1.5, 1.5]
-    self._add_geoms(Hazards(num=2, keepout=0.18))
+    self._add_geoms(Hazards(num=2, keepout=0.2))
 
 def patched_obs(self):
     lidar_vec = self._obs_lidar(self.hazards.pos, self.hazards.group)
@@ -163,8 +163,8 @@ class DiffusionSampler:
 # =================================================================
 if __name__ == '__main__':
     # 配置
-    MODEL_PATH = './diffuser_checkpoints/test1/diffuser_step_100000.pt'
-    NORM_PATH = './diffuser_checkpoints/test1/normalization.npz'
+    MODEL_PATH = './diffuser_checkpoints/xinde8ge/diffuser_step_5000.pt'
+    NORM_PATH = './diffuser_checkpoints/xinde8ge/normalization.npz'
     VIDEO_PATH = 'diffuser_godview.mp4'
     
     device = 'cuda:0'

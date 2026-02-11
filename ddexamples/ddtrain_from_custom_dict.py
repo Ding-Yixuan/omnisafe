@@ -32,7 +32,7 @@ def patched_init(self, config):
     
     # D. 修改环境元素
     self.placements_conf.extents = [-1.5, -1.5, 1.5, 1.5]
-    self._add_geoms(Hazards(num=2, keepout=0.18))
+    self._add_geoms(Hazards(num=2, keepout=0.2))
 
 def patched_build_observation_space(self):
     """替换 build_observation_space"""

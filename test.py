@@ -328,158 +328,302 @@
 # else:
 #     print("没有找到安全的 Epoch，建议放宽 Cost 筛选条件或检查训练。")
 
-# import numpy as np
-
-# # 1. 加载数据 (确保路径对)
-# data_path = './data_pro/ppolag_best2.npz'
-# print(f"📂 正在读取: {data_path}")
-# data = np.load(data_path)
-
-# # 2. 获取 segment_id
-# seg_ids = data['segment_id']
-# unique_segs = np.unique(seg_ids)
-
-# print(f"\n📊 总共发现 {len(unique_segs)} 条轨迹片段")
-# print("="*40)
-# print(f"{'ID':<5} | {'Length (Steps)':<15} | {'Status'}")
-# print("-" * 40)
-
-# # 3. 循环打印每一条的长度
-# lengths = []
-# for seg_id in unique_segs:
-#     # 计算当前 segment 的长度
-#     seg_len = np.sum(seg_ids == seg_id)
-#     lengths.append(seg_len)
-    
-#     # 简单的评价
-#     status = ""
-#     if seg_len < 50: status = "⚡️ 极速"
-#     elif seg_len > 1000: status = "🐢 超时/徘徊"
-#     elif seg_len > 500: status = "🤔 较慢"
-    
-#     print(f"{seg_id:<5} | {seg_len:<15} | {status}")
-
-# print("="*40)
-# print(f"平均轨迹长度: {np.mean(lengths):.2f} 步")
-# print(f"最短: {np.min(lengths)} 步")
-# print(f"最长: {np.max(lengths)} 步")
-
-import torch
 import numpy as np
-import os
-import safety_gymnasium
-import gymnasium
-from safety_gymnasium.assets.geoms import Hazards
-from safety_gymnasium.tasks.safe_navigation.goal.goal_level1 import GoalLevel1
-from safety_gymnasium.tasks.safe_navigation.goal.goal_level0 import GoalLevel0
 
-# ==========================================
-# 1. 环境定义 (必须和你现在的一样)
-# ==========================================
-def patched_init(self, config):
-    self.lidar_num_bins = 16
-    self.lidar_max_dist = 3.0
-    self.sensors_obs = ['accelerometer', 'velocimeter', 'gyro', 'magnetometer']
-    self.task_name = 'GoalLevel1_Reproduction'
-    config.update({'lidar_num_bins': 16, 'lidar_max_dist': 3.0, 'sensors_obs': self.sensors_obs, 'task_name': self.task_name})
-    GoalLevel0.__init__(self, config=config)
-    self.placements_conf.extents = [-1.5, -1.5, 1.5, 1.5]
-    self._add_geoms(Hazards(num=2, keepout=0.18))
+# 1. 加载数据 (确保路径对)
+data_path = './data_pro/ppolag_zuida.npz'
+print(f"📂 正在读取: {data_path}")
+data = np.load(data_path)
 
-def patched_obs(self):
-    lidar_vec = self._obs_lidar(self.hazards.pos, self.hazards.group)
-    acc = self.agent.get_sensor('accelerometer')[:2]
-    vel = self.agent.get_sensor('velocimeter')[:2]
-    gyro = self.agent.get_sensor('gyro')[-1:]
-    mag = self.agent.get_sensor('magnetometer')[:2]
-    
-    # 传感器部分 (7维)
-    sensor_vec = np.concatenate([acc, vel, gyro, mag])
-    
-    # 目标部分 (3维)
-    vec = (self.goal.pos - self.agent.pos) @ self.agent.mat
-    x, y = vec[0], vec[1]
-    z = x + 1j * y
-    dist = np.exp(-np.abs(z)) 
-    angle = np.angle(z)
-    goal_vec = np.array([dist, np.cos(angle), np.sin(angle)])
-    
-    # 拼接: [Sensor(7), Goal(3), Lidar(16)] = 26维
-    return np.concatenate([sensor_vec, goal_vec, lidar_vec]).astype(np.float32)
+# 2. 获取 segment_id
+seg_ids = data['segment_id']
+unique_segs = np.unique(seg_ids)
 
-GoalLevel1.__init__ = patched_init
-GoalLevel1.obs = patched_obs
+print(f"\n📊 总共发现 {len(unique_segs)} 条轨迹片段")
+print("="*40)
+print(f"{'ID':<5} | {'Length (Steps)':<15} | {'Status'}")
+print("-" * 40)
 
-# ==========================================
-# 2. 诊断主程序
-# ==========================================
-if __name__ == '__main__':
-    NORM_PATH = './diffuser_checkpoints/normalization.npz'
-    DATA_PATH = './data_pro/ppolag_best.npz' # 你的原始训练数据路径
+# 3. 循环打印每一条的长度
+lengths = []
+for seg_id in unique_segs:
+    # 计算当前 segment 的长度
+    seg_len = np.sum(seg_ids == seg_id)
+    lengths.append(seg_len)
     
-    print("============== 🩺 诊断报告 ==============")
+    # 简单的评价
+    status = ""
+    if seg_len < 50: status = "⚡️ 极速"
+    elif seg_len > 1000: status = "🐢 超时/徘徊"
+    elif seg_len > 500: status = "🤔 较慢"
     
-    # --- 检查 1: 归一化参数 ---
-    if not os.path.exists(NORM_PATH):
-        print(f"❌ 错误: 找不到 {NORM_PATH}")
-        exit()
-    
-    norm_data = np.load(NORM_PATH)
-    mins = norm_data['mins']
-    maxs = norm_data['maxs']
-    
-    print(f"1. 归一化参数检查:")
-    print(f"   维度: {mins.shape} (预期 28: 26 obs + 2 act)")
-    print(f"   Obs Mins (前5位): {mins[:5]}")
-    print(f"   Obs Maxs (前5位): {maxs[:5]}")
-    print(f"   Lidar Range (最后16位): Min={mins[-16:].min():.4f}, Max={maxs[-16:].max():.4f}")
-    
-    if np.allclose(mins, maxs):
-        print("   ❌ 严重警告: mins 和 maxs 完全相同！这将导致除零错误或全零输入。")
-    else:
-        print("   ✅ 参数分布看起来有数值。")
+    print(f"{seg_id:<5} | {seg_len:<15} | {status}")
 
-    # --- 检查 2: 原始数据分布 ---
-    if os.path.exists(DATA_PATH):
-        raw_data = np.load(DATA_PATH)
-        obs_data = raw_data['obs']
-        print(f"\n2. 原始训练数据检查 ({DATA_PATH}):")
-        print(f"   Obs Shape: {obs_data.shape}")
-        print(f"   Last 16 dims (Lidar) mean: {obs_data[:, -16:].mean():.4f}")
-        if obs_data.shape[1] != 26:
-            print(f"   ❌ 维度警告: 训练数据是 {obs_data.shape[1]} 维，但代码期望 26 维！")
-    else:
-        print(f"\n2. 原始训练数据未找到，跳过检查。")
+print("="*40)
+print(f"平均轨迹长度: {np.mean(lengths):.2f} 步")
+print(f"最短: {np.min(lengths)} 步")
+print(f"最长: {np.max(lengths)} 步")
 
-    # --- 检查 3: 实时环境数值 ---
-    print(f"\n3. 实时环境数值检查:")
-    env = safety_gymnasium.make('SafetyPointGoal1-v0')
-    obs, _ = env.reset()
-    
-    # 模拟走到障碍物附近
-    print("   正在移动机器人以获取非零观测...")
-    for _ in range(10):
-        obs, _, _, _, _, _ = env.step(np.array([1.0, 0.0]))
-    
-    print(f"   当前 Obs (Total 26 dims):")
-    print(f"   -> Sensor (0-6): {obs[:7]}")
-    print(f"   -> Goal   (7-9): {obs[7:10]}")
-    print(f"   -> Lidar  (10-25): {obs[10:]}")
-    
-    # 归一化模拟
-    obs_norm = (obs - mins[:26]) / (maxs[:26] - mins[:26])
-    obs_norm = 2 * obs_norm - 1
-    
-    print(f"\n4. 归一化后的 Obs (送入网络的值):")
-    print(f"   -> Range: [{obs_norm.min():.4f}, {obs_norm.max():.4f}]")
-    print(f"   -> Lidar Norm: {obs_norm[10:]}")
-    
-    if obs_norm.max() > 5.0 or obs_norm.min() < -5.0:
-        print("   ❌ 警告: 输入值极其巨大！说明归一化参数 min/max 和当前环境观测不匹配。")
-        print("      可能原因: 传感器顺序搞反了，或者单位不一致。")
-    elif np.allclose(obs_norm[10:], -1.0, atol=0.1):
-        print("   ⚠️ 警告: 雷达归一化后全是 -1。说明机器人以为周围全是空的，或者雷达没开。")
-    else:
-        print("   ✅ 输入值在合理范围 (-1 到 1 附近)。")
+# import torch
+# import numpy as np
+# import os
+# import safety_gymnasium
+# import gymnasium
+# from safety_gymnasium.assets.geoms import Hazards
+# from safety_gymnasium.tasks.safe_navigation.goal.goal_level1 import GoalLevel1
+# from safety_gymnasium.tasks.safe_navigation.goal.goal_level0 import GoalLevel0
 
-    print("\n============== 诊断结束 ==============")
+# # ==========================================
+# # 1. 环境定义 (必须和你现在的一样)
+# # ==========================================
+# def patched_init(self, config):
+#     self.lidar_num_bins = 16
+#     self.lidar_max_dist = 3.0
+#     self.sensors_obs = ['accelerometer', 'velocimeter', 'gyro', 'magnetometer']
+#     self.task_name = 'GoalLevel1_Reproduction'
+#     config.update({'lidar_num_bins': 16, 'lidar_max_dist': 3.0, 'sensors_obs': self.sensors_obs, 'task_name': self.task_name})
+#     GoalLevel0.__init__(self, config=config)
+#     self.placements_conf.extents = [-1.5, -1.5, 1.5, 1.5]
+#     self._add_geoms(Hazards(num=2, keepout=0.18))
+
+# def patched_obs(self):
+#     lidar_vec = self._obs_lidar(self.hazards.pos, self.hazards.group)
+#     acc = self.agent.get_sensor('accelerometer')[:2]
+#     vel = self.agent.get_sensor('velocimeter')[:2]
+#     gyro = self.agent.get_sensor('gyro')[-1:]
+#     mag = self.agent.get_sensor('magnetometer')[:2]
+    
+#     # 传感器部分 (7维)
+#     sensor_vec = np.concatenate([acc, vel, gyro, mag])
+    
+#     # 目标部分 (3维)
+#     vec = (self.goal.pos - self.agent.pos) @ self.agent.mat
+#     x, y = vec[0], vec[1]
+#     z = x + 1j * y
+#     dist = np.exp(-np.abs(z)) 
+#     angle = np.angle(z)
+#     goal_vec = np.array([dist, np.cos(angle), np.sin(angle)])
+    
+#     # 拼接: [Sensor(7), Goal(3), Lidar(16)] = 26维
+#     return np.concatenate([sensor_vec, goal_vec, lidar_vec]).astype(np.float32)
+
+# GoalLevel1.__init__ = patched_init
+# GoalLevel1.obs = patched_obs
+
+# # ==========================================
+# # 2. 诊断主程序
+# # ==========================================
+# if __name__ == '__main__':
+#     NORM_PATH = './diffuser_checkpoints/normalization.npz'
+#     DATA_PATH = './data_pro/ppolag_best.npz' # 你的原始训练数据路径
+    
+#     print("============== 🩺 诊断报告 ==============")
+    
+#     # --- 检查 1: 归一化参数 ---
+#     if not os.path.exists(NORM_PATH):
+#         print(f"❌ 错误: 找不到 {NORM_PATH}")
+#         exit()
+    
+#     norm_data = np.load(NORM_PATH)
+#     mins = norm_data['mins']
+#     maxs = norm_data['maxs']
+    
+#     print(f"1. 归一化参数检查:")
+#     print(f"   维度: {mins.shape} (预期 28: 26 obs + 2 act)")
+#     print(f"   Obs Mins (前5位): {mins[:5]}")
+#     print(f"   Obs Maxs (前5位): {maxs[:5]}")
+#     print(f"   Lidar Range (最后16位): Min={mins[-16:].min():.4f}, Max={maxs[-16:].max():.4f}")
+    
+#     if np.allclose(mins, maxs):
+#         print("   ❌ 严重警告: mins 和 maxs 完全相同！这将导致除零错误或全零输入。")
+#     else:
+#         print("   ✅ 参数分布看起来有数值。")
+
+#     # --- 检查 2: 原始数据分布 ---
+#     if os.path.exists(DATA_PATH):
+#         raw_data = np.load(DATA_PATH)
+#         obs_data = raw_data['obs']
+#         print(f"\n2. 原始训练数据检查 ({DATA_PATH}):")
+#         print(f"   Obs Shape: {obs_data.shape}")
+#         print(f"   Last 16 dims (Lidar) mean: {obs_data[:, -16:].mean():.4f}")
+#         if obs_data.shape[1] != 26:
+#             print(f"   ❌ 维度警告: 训练数据是 {obs_data.shape[1]} 维，但代码期望 26 维！")
+#     else:
+#         print(f"\n2. 原始训练数据未找到，跳过检查。")
+
+#     # --- 检查 3: 实时环境数值 ---
+#     print(f"\n3. 实时环境数值检查:")
+#     env = safety_gymnasium.make('SafetyPointGoal1-v0')
+#     obs, _ = env.reset()
+    
+#     # 模拟走到障碍物附近
+#     print("   正在移动机器人以获取非零观测...")
+#     for _ in range(10):
+#         obs, _, _, _, _, _ = env.step(np.array([1.0, 0.0]))
+    
+#     print(f"   当前 Obs (Total 26 dims):")
+#     print(f"   -> Sensor (0-6): {obs[:7]}")
+#     print(f"   -> Goal   (7-9): {obs[7:10]}")
+#     print(f"   -> Lidar  (10-25): {obs[10:]}")
+    
+#     # 归一化模拟
+#     obs_norm = (obs - mins[:26]) / (maxs[:26] - mins[:26])
+#     obs_norm = 2 * obs_norm - 1
+    
+#     print(f"\n4. 归一化后的 Obs (送入网络的值):")
+#     print(f"   -> Range: [{obs_norm.min():.4f}, {obs_norm.max():.4f}]")
+#     print(f"   -> Lidar Norm: {obs_norm[10:]}")
+    
+#     if obs_norm.max() > 5.0 or obs_norm.min() < -5.0:
+#         print("   ❌ 警告: 输入值极其巨大！说明归一化参数 min/max 和当前环境观测不匹配。")
+#         print("      可能原因: 传感器顺序搞反了，或者单位不一致。")
+#     elif np.allclose(obs_norm[10:], -1.0, atol=0.1):
+#         print("   ⚠️ 警告: 雷达归一化后全是 -1。说明机器人以为周围全是空的，或者雷达没开。")
+#     else:
+#         print("   ✅ 输入值在合理范围 (-1 到 1 附近)。")
+
+#     print("\n============== 诊断结束 ==============")
+
+# import numpy as np
+# import matplotlib.pyplot as plt
+# import seaborn as sns
+
+# def check_data_radius():
+#     # 1. 加载数据
+#     data_path = './data_pro/ppolag_zuida.npz' # 👈 换成你最新的数据集文件名
+#     try:
+#         data = np.load(data_path)
+#     except FileNotFoundError:
+#         print(f"❌ 找不到文件: {data_path}")
+#         return
+
+#     obs = data['obs']
+#     labels = data['is_safe']  # 1=Safe, 0=Unsafe
+    
+#     print(f"📊 数据总量: {len(labels)}")
+#     print(f"   安全样本: {np.sum(labels == 1)}")
+#     print(f"   不安全样本: {np.sum(labels == 0)}")
+
+#     # 2. 提取雷达的最大值 (代表离最近障碍物的距离)
+#     # Lidar 是 obs 的最后 16 维
+#     lidar_data = obs[:, -16:] 
+#     max_lidar = np.max(lidar_data, axis=1)
+
+#     # 3. 分析：在什么雷达强度下，标签变成了 Unsafe？
+#     # Lidar = exp(-dist). 
+#     # dist = 0 (贴脸) -> Lidar = 1.0
+#     # dist = large -> Lidar = 0.0
+    
+#     plt.figure(figsize=(12, 6))
+    
+#     # 画分布图
+#     sns.histplot(max_lidar[labels==1], color='green', label='Safe Samples', kde=False, bins=50, alpha=0.5, stat='density')
+#     sns.histplot(max_lidar[labels==0], color='red', label='Unsafe Samples', kde=False, bins=50, alpha=0.5, stat='density')
+    
+#     plt.xlabel('Max Lidar Value (1.0 = Touching Hazard Surface)')
+#     plt.ylabel('Density')
+#     plt.title('Distribution of Safe/Unsafe Labels vs. Lidar Reading')
+#     plt.legend()
+#     plt.grid(True, alpha=0.3)
+    
+#     # 找出“边界”：Unsafe 样本通常从哪个 Lidar 值开始出现？
+#     unsafe_lidars = max_lidar[labels==0]
+#     if len(unsafe_lidars) > 0:
+#         threshold_estimate = np.percentile(unsafe_lidars, 5) # 取 5% 分位点作为边界
+#         plt.axvline(threshold_estimate, color='black', linestyle='--', label=f'Estimated Boundary (Lidar={threshold_estimate:.2f})')
+#         print(f"\n🔍 诊断结果：")
+#         print(f"   Unsafe 标签开始大量出现的雷达阈值约为: {threshold_estimate:.2f}")
+        
+#         # 反推物理含义
+#         # Lidar = exp(-dist_surface) => dist_surface = -ln(Lidar)
+#         dist_surface = -np.log(threshold_estimate + 1e-6)
+#         print(f"   这意味着：当离障碍物表面约 {dist_surface:.2f} 米时，数据被标记为不安全。")
+        
+#         if dist_surface < 0.05:
+#             print("   ⚠️ 警告：你的数据可能真的只有在‘非常贴近’时才标记为不安全。")
+#             print("   👉 建议：训练时不需要改数据，但在使用 CBF 时，可以通过调节 h(x) 的阈值来通过补偿。")
+#         else:
+#             print("   ✅ 放心：你的数据在接触前已经留有余量 (Buffer)，包含了物理半径的影响。")
+            
+#     plt.savefig('./cbf_checkpoints/data_check.png')
+#     print("✅ 图表已保存至 ./cbf_checkpoints/data_check.png")
+#     plt.show()
+
+# if __name__ == '__main__':
+#     check_data_radius()
+
+# import gymnasium
+# import safety_gymnasium
+# import numpy as np
+# import mujoco
+
+# def get_mujoco_model(env):
+#     """鲁棒地查找 MuJoCo Model"""
+#     candidates = [
+#         (env.unwrapped, "model"),
+#         (env.unwrapped, "_model"),
+#         (getattr(env.unwrapped, "task", None), "model"),
+#         (getattr(env.unwrapped, "mujoco", None), "model")
+#     ]
+#     for obj, attr in candidates:
+#         if obj is not None and hasattr(obj, attr):
+#             return getattr(obj, attr)
+#     raise AttributeError("❌ 无法找到 MuJoCo 模型，封装层级太复杂！")
+
+# def verify_geometry():
+#     print("🌍 正在初始化环境...")
+#     env = gymnasium.make('SafetyPointGoal1-v0')
+#     env.reset()
+    
+#     # 1. 获取底层模型
+#     try:
+#         model = get_mujoco_model(env)
+#         print("✅ 成功获取 MuJoCo Model")
+#     except Exception as e:
+#         print(e)
+#         return
+
+#     print("=" * 40)
+#     print("🔍 MuJoCo 物理参数核查")
+#     print("=" * 40)
+
+#     # 2. 查找机器人的 Geom Size
+#     # 在 MuJoCo 中，Point 机器人的 Geom 通常叫 'robot' 或 'point'
+#     try:
+#         # 尝试名字 'robot'
+#         geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, 'robot')
+#         if geom_id == -1:
+#             # 尝试名字 'agent'
+#              geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, 'agent')
+        
+#         if geom_id != -1:
+#             # MuJoCo 的 geom_size 是一个数组 [size_x, size_y, size_z]
+#             # 对于球体 (sphere)，第一个值就是半径
+#             robot_size = model.geom_size[geom_id][0]
+#             print(f"🤖 Robot Geom ID: {geom_id}")
+#             print(f"📏 Robot Radius (Geom Size): 【 {robot_size:.6f} 米 】")
+#         else:
+#             print("❌ 未找到名为 'robot' 或 'agent' 的 Geom，打印所有 Geom 名字：")
+#             for i in range(model.ngeom):
+#                 name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i)
+#                 print(f"   - ID {i}: {name}, Size: {model.geom_size[i][0]}")
+
+#     except Exception as e:
+#         print(f"❌ 读取 Geom 失败: {e}")
+
+#     # 3. 验证 Hazards 大小
+#     print("-" * 40)
+#     try:
+#         # 尝试直接读取 SafetyGym 配置
+#         if hasattr(env.task, 'hazards'):
+#              print(f"⚠️ Hazards Config Size: 【 {env.task.hazards.size:.6f} 米 】")
+#         elif hasattr(env.task, '_geoms') and 'hazards' in env.task._geoms:
+#              # 旧版本兼容
+#              print(f"⚠️ Hazards Config Size: 【 {env.task._geoms['hazards'].size:.6f} 米 】")
+#     except:
+#         print("⚠️ 无法读取 Hazard 配置对象")
+
+#     print("=" * 40)
+
+# if __name__ == '__main__':
+#     verify_geometry()

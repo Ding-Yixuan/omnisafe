@@ -602,7 +602,7 @@ def patched_init(self, config):
                    'sensors_obs': self.sensors_obs, 'task_name': self.task_name})
     GoalLevel0.__init__(self, config=config)
     self.placements_conf.extents = [-1.5, -1.5, 1.5, 1.5]
-    self._add_geoms(Hazards(num=2, keepout=0.18))
+    self._add_geoms(Hazards(num=2, keepout=0.2))
 
 def patched_build_observation_space(self):
     self.observation_space = gymnasium.spaces.Box(low=-np.inf, high=np.inf, shape=(26,), dtype=np.float32)

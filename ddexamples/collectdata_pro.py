@@ -19,7 +19,7 @@ def patched_init(self, config):
     config.update({'lidar_num_bins': 16, 'lidar_max_dist': 3.0, 'sensors_obs': self.sensors_obs, 'task_name': self.task_name})
     GoalLevel0.__init__(self, config=config)
     self.placements_conf.extents = [-1.5, -1.5, 1.5, 1.5]
-    self._add_geoms(Hazards(num=2, keepout=0.18))
+    self._add_geoms(Hazards(num=2, keepout=0.2))
 
 def patched_build_observation_space(self):
     self.observation_space = gymnasium.spaces.Box(low=-np.inf, high=np.inf, shape=(26,), dtype=np.float32)
@@ -49,27 +49,92 @@ print("✅ 环境 Patch 已应用 (26维)")
 # 2. 辅助函数
 # =================================================================
 
+# def calculate_ttc(env_task, agent_pos, agent_vel):
+#     """计算 TTC (修复维度问题)"""
+#     min_ttc = float('inf')
+#     try:
+#         hazards_pos = env_task.hazards.pos
+#         hazards_radius = 0.18
+#     except:
+#         hazards_pos = env_task._geoms['hazards'].pos
+#         hazards_radius = 0.18
+#     agent_radius = 0.05
+    
+#     for h_pos in hazards_pos:
+#         # ✅ 修复点：h_pos 是 (3,)，我们只取前两维 (2,)
+#         h_pos_2d = h_pos[:2] 
+        
+#         rel_pos = h_pos_2d - agent_pos
+#         dist_center = np.linalg.norm(rel_pos)
+#         dist_surface = dist_center - agent_radius - hazards_radius
+        
+#         if dist_surface <= 0: return 0.0 # 已经碰撞
+        
+#         if dist_center > 1e-6: 
+#             direction = rel_pos / dist_center
+#         else: 
+#             direction = np.zeros(2)
+            
+#         v_proj = np.dot(agent_vel, direction)
+        
+#         if v_proj > 0: # 正在靠近
+#             ttc = dist_surface / v_proj
+#         else: # 正在远离
+#             ttc = float('inf')
+            
+#         if ttc < min_ttc:
+#             min_ttc = ttc
+            
+#     return min_ttc
+
 def calculate_ttc(env_task, agent_pos, agent_vel):
-    """计算 TTC (修复维度问题)"""
+    """
+    计算 TTC (Time-To-Collision)
+    基于脚本 verify_geometry 确认的真实物理参数：
+    - Agent (Point): 半径 0.10m
+    - Hazard: 半径 0.20m
+    """
     min_ttc = float('inf')
+    
+    # 1. 获取 Hazard 位置
     try:
         hazards_pos = env_task.hazards.pos
-        hazards_radius = 0.18
+        # 【基于脚本实测】虽然 keepout=0.18，但物理半径实测为 0.20
+        hazards_radius = 0.20 
     except:
-        hazards_pos = env_task._geoms['hazards'].pos
-        hazards_radius = 0.18
-    agent_radius = 0.05
+        # 兼容旧代码结构
+        if hasattr(env_task, '_geoms') and 'hazards' in env_task._geoms:
+            hazards_pos = env_task._geoms['hazards'].pos
+        else:
+             # 最后的 fallback，防止报错
+            hazards_pos = []
+        hazards_radius = 0.20
     
+    # 2. 【基于脚本实测】Robot 物理半径
+    agent_radius = 0.10
+    
+    # 3. 接触阈值 (圆心距)
+    # 0.10 + 0.20 = 0.30m
+    collision_threshold = agent_radius + hazards_radius
+    
+    if len(hazards_pos) == 0:
+        return float('inf')
+
     for h_pos in hazards_pos:
-        # ✅ 修复点：h_pos 是 (3,)，我们只取前两维 (2,)
+        # 取前两维 (x, y)
         h_pos_2d = h_pos[:2] 
         
         rel_pos = h_pos_2d - agent_pos
         dist_center = np.linalg.norm(rel_pos)
-        dist_surface = dist_center - agent_radius - hazards_radius
         
-        if dist_surface <= 0: return 0.0 # 已经碰撞
+        # --- 核心：表面距离计算 ---
+        dist_surface = dist_center - collision_threshold
         
+        # 已经碰撞 (重叠)
+        if dist_surface <= 0: 
+            return 0.0 
+        
+        # 计算速度投影
         if dist_center > 1e-6: 
             direction = rel_pos / dist_center
         else: 
@@ -77,15 +142,15 @@ def calculate_ttc(env_task, agent_pos, agent_vel):
             
         v_proj = np.dot(agent_vel, direction)
         
-        if v_proj > 0: # 正在靠近
+        # 只有在靠近 (v > 0) 时才计算 TTC
+        # 设定一个极小的速度阈值，过滤静止抖动
+        if v_proj > 1e-4: 
             ttc = dist_surface / v_proj
-        else: # 正在远离
-            ttc = float('inf')
-            
-        if ttc < min_ttc:
-            min_ttc = ttc
-            
+            if ttc < min_ttc:
+                min_ttc = ttc
+        
     return min_ttc
+
 def get_real_task(adapter_env):
     """剥洋葱：找到底层 SafetyGymnasium 环境"""
     current = adapter_env
@@ -233,7 +298,7 @@ def collect_split_trajectories(agent, num_episodes=500, save_path="./data_pro"):
             print(f"⚠️ 警告: 字段 {k} 清洗失败: {e}")
 
     os.makedirs(save_path, exist_ok=True)
-    file_name = os.path.join(save_path, "ppolag_shicbf.npz")
+    file_name = os.path.join(save_path, "ppolag_xinde8ge.npz")
     np.savez_compressed(file_name, **final_dataset)
     
     print(f"\n🎉 恭喜! 数据采集完成，已保存至: {file_name}")
@@ -248,7 +313,7 @@ def collect_split_trajectories(agent, num_episodes=500, save_path="./data_pro"):
 if __name__ == '__main__':
     import os
     # 🎯 目标路径
-    base_dir = "/home/lqz27/dyx_ws/omnisafe/runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-07-19-09-38/torch_save"
+    base_dir = "/home/lqz27/dyx_ws/omnisafe/runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-10-21-13-01/torch_save"
     path_337 = os.path.join(base_dir, "epoch-337.pt")
     path_500 = os.path.join(base_dir, "epoch-500.pt")
     
