@@ -66,8 +66,8 @@ def visualize_landscape():
     device = 'cuda:0'
     
     # --- 配置 ---
-    CBF_PATH = './cbf_checkpoints/cbf2/cbf_model.pt'
-    NORM_PATH = './cbf_checkpoints/cbf2/cbf_normalization.npz'
+    CBF_PATH = './看cbf数据/ppolag_测试data/best_cbf_model.pt'
+    NORM_PATH = './看cbf数据/ppolag_测试data/cbf_normalization.npz'
     
     # 自定义障碍物位置 (上帝视角)
     OBSTACLES = [[-0.5, 0.5], [0.5, -0.5]] 

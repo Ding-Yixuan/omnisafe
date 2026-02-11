@@ -40,6 +40,70 @@ def patched_obs(self):
 GoalLevel1.__init__ = patched_init
 GoalLevel1.obs = patched_obs
 
+def calculate_ttc(env_task, agent_pos, agent_vel):
+    """
+    计算 TTC (Time-To-Collision)
+    基于脚本 verify_geometry 确认的真实物理参数：
+    - Agent (Point): 半径 0.10m
+    - Hazard: 半径 0.20m
+    """
+    min_ttc = float('inf')
+    
+    # 1. 获取 Hazard 位置
+    try:
+        hazards_pos = env_task.hazards.pos
+        # 【基于脚本实测】虽然 keepout=0.18，但物理半径实测为 0.20
+        hazards_radius = 0.20 
+    except:
+        # 兼容旧代码结构
+        if hasattr(env_task, '_geoms') and 'hazards' in env_task._geoms:
+            hazards_pos = env_task._geoms['hazards'].pos
+        else:
+             # 最后的 fallback，防止报错
+            hazards_pos = []
+        hazards_radius = 0.20
+    
+    # 2. 【基于脚本实测】Robot 物理半径
+    agent_radius = 0.10
+    
+    # 3. 接触阈值 (圆心距)
+    # 0.10 + 0.20 = 0.30m
+    collision_threshold = agent_radius + hazards_radius
+    
+    if len(hazards_pos) == 0:
+        return float('inf')
+
+    for h_pos in hazards_pos:
+        # 取前两维 (x, y)
+        h_pos_2d = h_pos[:2] 
+        
+        rel_pos = h_pos_2d - agent_pos
+        dist_center = np.linalg.norm(rel_pos)
+        
+        # --- 核心：表面距离计算 ---
+        dist_surface = dist_center - collision_threshold
+        
+        # 已经碰撞 (重叠)
+        if dist_surface <= 0: 
+            return 0.0 
+        
+        # 计算速度投影
+        if dist_center > 1e-6: 
+            direction = rel_pos / dist_center
+        else: 
+            direction = np.zeros(2)
+            
+        v_proj = np.dot(agent_vel, direction)
+        
+        # 只有在靠近 (v > 0) 时才计算 TTC
+        # 设定一个极小的速度阈值，过滤静止抖动
+        if v_proj > 1e-4: 
+            ttc = dist_surface / v_proj
+            if ttc < min_ttc:
+                min_ttc = ttc
+        
+    return min_ttc
+
 # =================================================================
 # 2. 手动重建 PPO Agent (针对 'dict' 只有权重的情况)
 # =================================================================
@@ -145,51 +209,70 @@ class PPO_Inference_Agent(nn.Module):
 # 3. 采集主程序
 # =================================================================
 def collect():
-    # 配置
+    # ================= 配置 =================
     AGENT_PATH = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-10-21-13-01/torch_save/epoch-450.pt'
     SAVE_PATH = './data_pro/ppolag_测试data.npz'
     MAX_STEPS = 50000
+    TTC_THRESHOLD = 1.0  # 安全阈值
     
     # 1. 加载 Agent
     print(f"🔄 手动组装 Agent from {AGENT_PATH}...")
     ckpt = torch.load(AGENT_PATH, map_location='cpu')
-    
-    # 假设 hidden_sizes=[64, 64] (OmniSafe 默认值)
-    # 如果你改过配置，请在这里修改
     agent = PPO_Inference_Agent(obs_dim=26, act_dim=2, hidden_sizes=[64, 64])
     agent.load_from_dict(ckpt)
     
     # 2. 创建环境
     env = safety_gymnasium.make('SafetyPointGoal1-v0')
     
-    obs_buffer = []
-    act_buffer = []
-    segment_ids = []
+    # --- 初始化增强型 Buffer ---
+    dataset = {
+        'obs': [], 'act': [], 'next_obs': [], 'rew': [], 'env_cost': [], 
+        'done': [], 'ttc': [], 'is_safe': [], 'goal_pos': [], 
+        'agent_pos': [], 'segment_id': []
+    }
+    
     current_segment = 0
     total_steps = 0
-    
-    print("🚀 Start collecting RAW data (using Reconstructed Agent)...")
-    
     o, _ = env.reset()
     
+    print("🚀 Start collecting ENHANCED data (Code 1 Framework + Code 2 Content)...")
+    
     while total_steps < MAX_STEPS:
-        # A. 获取 Raw Obs
+        # A. 获取当前 Raw Obs (代码 1 特有补丁)
         raw_obs_numpy = env.task.obs() 
         
-        # B. 决策 (使用手动组装的 agent)
+        # B. 决策
         action = agent.step(raw_obs_numpy)
 
-        # C. 执行
+        # C. 执行环境步
         next_o, reward, cost, done, trunc, info = env.step(action)
         
-        # D. 存储
-        obs_buffer.append(raw_obs_numpy)
-        act_buffer.append(action)
-        segment_ids.append(current_segment)
+        # --- D. 物理信息提取 (集成自代码 2) ---
+        # 获取机器人和目标的实时物理位置
+        agent_pos = env.task.agent.pos[:2].copy()
+        agent_vel = env.task.agent.vel[:2].copy()
+        goal_pos = env.task.goal.pos[:2].copy()
+        
+        # 计算 TTC (直接在循环内调用计算逻辑)
+        ttc_val = calculate_ttc(env.task, agent_pos, agent_vel)
+        is_safe = 1 if ttc_val > TTC_THRESHOLD else 0
+        
+        # E. 存储到 Dataset
+        dataset['obs'].append(raw_obs_numpy)
+        dataset['act'].append(action)
+        dataset['next_obs'].append(next_o) # 环境标准的 next_obs
+        dataset['rew'].append(reward)
+        dataset['env_cost'].append(cost)
+        dataset['done'].append(done or trunc)
+        dataset['ttc'].append(ttc_val)
+        dataset['is_safe'].append(is_safe)
+        dataset['goal_pos'].append(goal_pos)
+        dataset['agent_pos'].append(agent_pos)
+        dataset['segment_id'].append(current_segment)
         
         total_steps += 1
         if total_steps % 1000 == 0:
-            print(f"Collected {total_steps}/{MAX_STEPS} steps...")
+            print(f"Collected {total_steps}/{MAX_STEPS} steps... TTC Mean: {np.mean(dataset['ttc'][-100:]):.2f}")
 
         if done or trunc:
             o, _ = env.reset()
@@ -197,13 +280,13 @@ def collect():
         else:
             o = next_o
 
-    print(f"💾 Saving to {SAVE_PATH}...")
-    np.savez(SAVE_PATH, obs=np.array(obs_buffer), act=np.array(act_buffer), segment_id=np.array(segment_ids))
-    
-    # 验证
-    obs_arr = np.array(obs_buffer)
-    print(f"Debug: Lidar Min: {obs_arr[:,-16:].min():.4f}")
-    print(f"Debug: Lidar Max: {obs_arr[:,-16:].max():.4f}")
+    # F. 清洗并保存
+    print(f"💾 Saving ENHANCED data to {SAVE_PATH}...")
+    # 将列表转换为 Numpy 数组并压缩保存
+    final_data = {k: np.array(v) for k, v in dataset.items()}
+    np.savez_compressed(SAVE_PATH, **final_data)
+    print("🎉 Done!")
 
+# 注意：你需要把代码 2 中的 calculate_ttc 函数复制到代码 1 中，放在 collect 函数上方。
 if __name__ == '__main__':
     collect()

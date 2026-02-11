@@ -9,16 +9,16 @@ import matplotlib.pyplot as plt
 # 1. 配置参数
 # =================================================================
 CONFIG = {
-    'dataset_path': './data_pro/ppolag_best2.npz',  # 你的数据路径
+    'dataset_path': './data_pro/ppolag_测试data.npz',  # 你的数据路径
     'horizon': 64,          # 规划视界：一次生成多少步 (H)
     'obs_dim': 26,          # 观测维度
     'act_dim': 2,           # 动作维度
     'hidden_dim': 256,      # 网络隐藏层维度
-    'train_steps': 100000,  # 训练步数 (不是 Epoch，是 Gradient Steps)
+    'train_steps': 50000,  # 训练步数 (不是 Epoch，是 Gradient Steps)
     'batch_size': 256,      # 批次大小
     'lr': 2e-4,             # 学习率
     'device': 'cuda:0',     # 设备
-    'save_dir': './diffuser_checkpoints/shicbf',  # 模型保存路径
+    'save_dir': './看loss曲线/ppolag_测试data',  # 模型保存路径
 }
 
 # =================================================================

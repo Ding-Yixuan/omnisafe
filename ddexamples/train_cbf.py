@@ -190,7 +190,7 @@ import matplotlib.pyplot as plt
 # 1. 配置参数
 # =================================================================
 CONFIG = {
-    'dataset_path': './data_pro/ppolag_zuida.npz',  # 👈 确保文件名对
+    'dataset_path': './data_pro/ppolag_测试data.npz',  # 👈 确保文件名对
     'obs_dim': 26,
     'hidden_dim': 256,
     'lr': 3e-4,              # 稍微调小一点，更稳定
@@ -198,7 +198,7 @@ CONFIG = {
     'train_steps': 30000,    # 👈 修正：3万步足够了 (约150个Epoch)
     'eval_freq': 1000,       # 每1000步验证一次
     'device': 'cuda:0',
-    'save_dir': './cbf_checkpoints/cbf3'
+    'save_dir': './看cbf数据/ppolag_测试data'
 }
 
 # =================================================================

@@ -88,68 +88,26 @@ print("成功 Monkey Patch: __init__, build_observation_space, obs")
 env_id = 'SafetyPointGoal1-v0'
 
 ###########################ppo
-# if __name__ == '__main__':
-#     custom_cfgs = {
-#         'train_cfgs': {
-#             'total_steps': 1024000,
-#             'vector_env_nums': 1,
-#             'parallel': 1,
-#             'device': 'cuda:0',
-#         },
-#         'algo_cfgs': {
-#             'steps_per_epoch': 2048,
-#             'update_iters': 10,
-#             'use_cost': False, 
-#         },
-#         'logger_cfgs': {
-#             'use_wandb': False,
-#             'save_model_freq': 50,
-#         },
-#         'model_cfgs': {
-#              'actor': {
-#                  'hidden_sizes': [256, 256],
-#                  'activation': 'tanh'
-#              },
-#              'critic': {
-#                  'hidden_sizes': [256, 256],
-#                  'activation': 'tanh'
-#              }
-#         },
-#     }
-
-
-###########################ppolag
 if __name__ == '__main__':
-    # 使用官方 ID (我们已经 Patch 了它的底层逻辑)
-    env_id = 'SafetyPointGoal1-v0'
-    
     custom_cfgs = {
-        # 1. 训练通用参数
         'train_cfgs': {
             'total_steps': 1024000,
             'vector_env_nums': 1,
             'parallel': 1,
             'device': 'cuda:0',
         },
-        # 2. 算法参数
         'algo_cfgs': {
             'steps_per_epoch': 2048,
             'update_iters': 10,
-            'gamma': 0.99,
-            'lam': 0.97,
-            'clip': 0.2,
-            'use_cost': True,  # 【关键】PPOLag 必须开启 Cost
+            'use_cost': False, 
         },
-        # 3. 拉格朗日参数 (严格复现论文 Table I)
-        'lagrange_cfgs': {
-            'cost_limit': 0,                 # 论文  设为 0
-            'lagrangian_multiplier_init': 1.0, # 论文  Table I
-            'lambda_lr': 0.01,                 # 论文  Table I
+        'logger_cfgs': {
+            'use_wandb': False,
+            'save_model_freq': 50,
         },
-        # 4. 模型架构 (可选：复现论文网络结构)
         'model_cfgs': {
              'actor': {
-                 'hidden_sizes': [256, 256],   # 论文 
+                 'hidden_sizes': [256, 256],
                  'activation': 'tanh'
              },
              'critic': {
@@ -157,17 +115,59 @@ if __name__ == '__main__':
                  'activation': 'tanh'
              }
         },
-        # 5. 日志参数
-        'logger_cfgs': {
-            'use_wandb': False,
-            'save_model_freq': 50,
-        },
     }
 
 
+###########################ppolag
+# if __name__ == '__main__':
+#     # 使用官方 ID (我们已经 Patch 了它的底层逻辑)
+#     env_id = 'SafetyPointGoal1-v0'
+    
+#     custom_cfgs = {
+#         # 1. 训练通用参数
+#         'train_cfgs': {
+#             'total_steps': 1024000,
+#             'vector_env_nums': 1,
+#             'parallel': 1,
+#             'device': 'cuda:0',
+#         },
+#         # 2. 算法参数
+#         'algo_cfgs': {
+#             'steps_per_epoch': 2048,
+#             'update_iters': 10,
+#             'gamma': 0.99,
+#             'lam': 0.97,
+#             'clip': 0.2,
+#             'use_cost': True,  # 【关键】PPOLag 必须开启 Cost
+#         },
+#         # 3. 拉格朗日参数 (严格复现论文 Table I)
+#         'lagrange_cfgs': {
+#             'cost_limit': 0,                 # 论文  设为 0
+#             'lagrangian_multiplier_init': 1.0, # 论文  Table I
+#             'lambda_lr': 0.01,                 # 论文  Table I
+#         },
+#         # 4. 模型架构 (可选：复现论文网络结构)
+#         'model_cfgs': {
+#              'actor': {
+#                  'hidden_sizes': [256, 256],   # 论文 
+#                  'activation': 'tanh'
+#              },
+#              'critic': {
+#                  'hidden_sizes': [256, 256],
+#                  'activation': 'tanh'
+#              }
+#         },
+#         # 5. 日志参数
+#         'logger_cfgs': {
+#             'use_wandb': False,
+#             'save_model_freq': 50,
+#         },
+#     }
+
+
     print(f"初始化 Agent (ID: {env_id})...")
-    # agent = omnisafe.Agent('PPO', env_id, custom_cfgs=custom_cfgs)
-    agent = omnisafe.Agent('PPOLag', env_id, custom_cfgs=custom_cfgs)
+    agent = omnisafe.Agent('PPO', env_id, custom_cfgs=custom_cfgs)
+    # agent = omnisafe.Agent('PPOLag', env_id, custom_cfgs=custom_cfgs)
     
     # =================================================================
     # 4. 最终验证

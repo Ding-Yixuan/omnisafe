@@ -1,217 +1,204 @@
 import torch
-import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
-import gymnasium
-import safety_gymnasium
-from safety_gymnasium.assets.geoms import Hazards
-from safety_gymnasium.tasks.safe_navigation.goal.goal_level1 import GoalLevel1
-from safety_gymnasium.tasks.safe_navigation.goal.goal_level0 import GoalLevel0
+import matplotlib.colors as mcolors
+from train_cbf import CBFNetwork  # 👈 保持引用
 
 # =================================================================
-# 1. 简易 Patch (只为了初始化环境拿坐标，不需要 patch obs)
+# 1. 简易虚拟雷达 (逻辑修正版：去除 Debug 信息，保留 Heading 旋转)
 # =================================================================
-def patched_init(self, config):
-    self.lidar_num_bins = 16
-    self.lidar_max_dist = 3.0
-    self.sensors_obs = ['accelerometer', 'velocimeter', 'gyro', 'magnetometer']
-    self.task_name = 'GoalLevel1_Reproduction'
-    config.update({'lidar_num_bins': 16, 'lidar_max_dist': 3.0, 
-                   'sensors_obs': self.sensors_obs, 'task_name': self.task_name})
-    GoalLevel0.__init__(self, config=config)
-    self.placements_conf.extents = [-1.5, -1.5, 1.5, 1.5]
-    self._add_geoms(Hazards(num=2, keepout=0.18))
-
-GoalLevel1.__init__ = patched_init
-
-# =================================================================
-# 2. CBF 网络定义
-# =================================================================
-class CBFNetwork(nn.Module):
-    def __init__(self, obs_dim, hidden_dim=256):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(obs_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
-    def forward(self, x): return self.net(x)
-
-# =================================================================
-# 3. 核心工具：纯数学构造 Observation (God Mode)
-# =================================================================
-def synthesize_obs(x, y, goal_pos, hazards_pos, lidar_num_bins=16, max_dist=3.0):
+def get_virtual_lidar(agent_pos, obstacles, heading, num_bins=16, max_dist=3.0):
     """
-    不依赖 MuJoCo，直接根据几何关系计算 Observation (26维)
+    计算 Lidar 数据，射线方向随 robot_heading 旋转
     """
-    # --- A. Sensors (7维) ---
-    # 假设静态绘图，速度加速度均为0，朝向(Heading)固定为 0 (正东)
-    # [acc_x, acc_y, vel_x, vel_y, gyro_z, mag_x, mag_y]
-    # mag 在 heading=0 时通常指向 (1, 0) 或者根据环境北极。这里设为默认值。
-    sensor_vec = np.zeros(7, dtype=np.float32)
-    sensor_vec[5] = 1.0 # mag_x
+    lidar = np.zeros(num_bins) 
+    # 0 代表车头正前方 (Local Frame)
+    relative_angles = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
     
-    # --- B. Goal (3维) ---
-    # 向量计算
-    dx = goal_pos[0] - x
-    dy = goal_pos[1] - y
-    # 因为假设 robot heading=0，所以旋转矩阵是单位矩阵，直接用 dx, dy
-    # 复数变换 (论文同款)
-    z = dx + 1j * dy
-    dist = np.abs(z)
-    dist_enc = np.exp(-dist) 
-    angle = np.angle(z)
-    goal_vec = np.array([dist_enc, np.cos(angle), np.sin(angle)], dtype=np.float32)
+    agent_radius = 0.1 
+    hazard_radius = 0.2 
     
-    # --- C. Lidar (16维) ---
-    # 模拟 Safety Gymnasium 的 Lidar 逻辑
-    lidar_vec = np.zeros(lidar_num_bins, dtype=np.float32)
-    bin_size = 2 * np.pi / lidar_num_bins
-    
-    for hz_pos in hazards_pos:
-        # 相对位置
-        hz_dx = hz_pos[0] - x
-        hz_dy = hz_pos[1] - y
-        hz_dist = np.sqrt(hz_dx**2 + hz_dy**2)
+    for i, rel_angle in enumerate(relative_angles):
+        # 🔥 核心修正：绝对角度 = 相对角度 + 机器人朝向
+        abs_angle = rel_angle + heading
         
-        # 如果超出最大探测距离，忽略
-        if hz_dist > max_dist:
-            continue
+        ray_dir = np.array([np.cos(abs_angle), np.sin(abs_angle)])
+        closest_dist = float('inf')
+        
+        for obs in obstacles:
+            obs = np.array(obs)
+            rel_pos = obs - agent_pos
+            proj = np.dot(rel_pos, ray_dir)
             
-        # 计算角度 (相对于机器人朝向 0)
-        hz_angle = np.arctan2(hz_dy, hz_dx) 
-        # 归一化到 [0, 2pi]
-        hz_angle = hz_angle % (2 * np.pi)
+            if proj > 0:
+                dist_to_ray = np.linalg.norm(rel_pos - proj * ray_dir)
+                if dist_to_ray < hazard_radius:
+                    half_chord = np.sqrt(hazard_radius**2 - dist_to_ray**2)
+                    d = proj - half_chord - agent_radius
+                    if d < closest_dist:
+                        closest_dist = d
         
-        # 确定分箱
-        bin_idx = int(hz_angle / bin_size) % lidar_num_bins
-        
-        # 计算强度 exp(-dist)
-        intensity = np.exp(-hz_dist)
-        
-        # Safety Gym 逻辑：取该 bin 中最大的强度 (最近的障碍物)
-        if intensity > lidar_vec[bin_idx]:
-            lidar_vec[bin_idx] = intensity
+        if closest_dist < max_dist:
+            lidar[i] = np.exp(-closest_dist)
+        else:
+            lidar[i] = 0.0
             
-        # *可选优化*：为了防止 aliasing，可以将强度分散到相邻 bin，
-        # 但 Point 机器人的标准 Lidar 通常是 binary binning。
-            
-    # --- D. 拼接 ---
-    return np.concatenate([sensor_vec, goal_vec, lidar_vec])
+    return lidar
 
 # =================================================================
-# 4. 绘图主程序
+# 2. 可视化主程序 (最终版：逻辑正确 + 画面干净)
 # =================================================================
-def plot_god_mode():
+def visualize_landscape_final():
+    device = 'cuda:0'
+    
+    # --- 🎛️ 参数调整区域 ---
+    MANUAL_SPEED = 1.0        # 速度大小
+    
+    # 方向 (弧度): 
+    # 5*np.pi/4 (左下), np.pi/4 (右上), np.pi (左), 0 (右)
+    # 设为 None 则自动朝向 Goal
+    MANUAL_HEADING = 7 * np.pi / 4  
+    
+    SAFETY_MARGIN = 0.1       # 缓冲带宽度
+    RESOLUTION = 150          # 分辨率
+    
     # --- 配置 ---
-    model_path = './cbf_checkpoints/cbf_v1/best_cbf_model.pt'
-    norm_path = './cbf_checkpoints/cbf_v1/cbf_normalization.npz'
-    save_path = './cbf_checkpoints/cbf_v1/final_cbf_map.png'
-    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    CBF_PATH = './看cbf数据/ppolag_测试data2让边界变小/best_cbf_model.pt'
+    NORM_PATH = './看cbf数据/ppolag_测试data2让边界变小/cbf_normalization.npz'
     
-    # 1. 加载参数
-    print("📉 Loading Stats...")
-    norm_data = np.load(norm_path)
+    # 场景定义
+    OBSTACLES = [[-0.5, 0.5], [0.5, -0.5]] 
+    GOAL = [-1.0, -1.0] # 你的新终点
+    
+    # --- 加载模型 ---
+    print(f"🔄 Loading model from {CBF_PATH}...")
+    model = CBFNetwork(obs_dim=26).to(device)
+    model.load_state_dict(torch.load(CBF_PATH, map_location=device))
+    model.eval()
+    
+    # --- 加载归一化参数 ---
+    norm_data = np.load(NORM_PATH)
     mins = torch.from_numpy(norm_data['mins']).float().to(device)
     maxs = torch.from_numpy(norm_data['maxs']).float().to(device)
 
-    # 2. 加载模型
-    print("🧠 Loading Model...")
-    cbf_net = CBFNetwork(26).to(device)
-    try:
-        cbf_net.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
-    except TypeError:
-        cbf_net.load_state_dict(torch.load(model_path, map_location=device))
-    cbf_net.eval()
+    # --- 生成网格 ---
+    x_range = np.linspace(-1.5, 1.5, RESOLUTION) 
+    y_range = np.linspace(-1.5, 1.5, RESOLUTION)
+    X, Y = np.meshgrid(x_range, y_range)
+    Z = np.zeros_like(X) 
 
-    # 3. 初始化环境 (仅用于提取 Goal 和 Hazard 的真实坐标)
-    print("🌍 Reading Map Config...")
-    env = gymnasium.make('SafetyPointGoal1-v0')
-    env.reset()
+    print(f"🚀 计算全图 CBF 值 (Speed={MANUAL_SPEED}, Heading={MANUAL_HEADING:.2f})...")
     
-    hazards_pos = env.task.hazards.pos.copy()
-    goal_pos = env.task.goal.pos.copy()
+    goal_np = np.array(GOAL)
     
-    print(f"📍 Hazards True Pos: \n{hazards_pos}")
-    print(f"📍 Goal True Pos: {goal_pos}")
-
-    # 4. 扫描网格 (纯数学计算，速度极快)
-    res = 200 
-    x = np.linspace(-1.5, 1.5, res)
-    y = np.linspace(-1.5, 1.5, res)
-    X, Y = np.meshgrid(x, y)
-    Z = np.zeros_like(X)
-
-    print("📸 Scanning (God Mode: Mathematical Synthesis)...")
-    
-    # 批量处理或逐点处理，这里为了清晰逐点处理
-    obs_batch = []
-    indices = []
-    
-    for i in range(res):
-        for j in range(res):
-            obs = synthesize_obs(X[i, j], Y[i, j], goal_pos, hazards_pos)
-            obs_batch.append(obs)
-            indices.append((i, j))
+    for i in range(RESOLUTION):
+        for j in range(RESOLUTION):
+            agent_pos = np.array([X[i, j], Y[i, j]])
             
-    # 转为 Tensor 批量预测 (提速)
-    obs_tensor = torch.tensor(np.array(obs_batch), dtype=torch.float32).to(device)
-    
-    # 归一化
-    obs_norm = (obs_tensor - mins) / (maxs - mins)
-    obs_norm = 2 * obs_norm - 1
-    obs_norm = torch.clamp(obs_norm, -1.0, 1.0)
-    
-    with torch.no_grad():
-        preds = cbf_net(obs_norm).cpu().numpy().flatten()
-        
-    # 填回 Z
-    for k, (i, j) in enumerate(indices):
-        Z[i, j] = preds[k]
+            # --- 1. 确定方向 ---
+            vec = goal_np - agent_pos
+            cx, cy = vec[0], vec[1]
+            z_complex = cx + 1j * cy
+            angle_to_goal = np.angle(z_complex)
+            
+            if MANUAL_HEADING is not None:
+                current_heading = MANUAL_HEADING
+            else:
+                current_heading = angle_to_goal
+            
+            # --- 2. 构造 Observation ---
+            
+            # A. Lidar (带 Heading 修正)
+            lidar = get_virtual_lidar(agent_pos, OBSTACLES, heading=current_heading)
+            
+            # B. Goal Vector (3)
+            # Goal 向量在 Observation 中通常是相对坐标旋转后的结果
+            # 但在这里为了简化，只要相对距离和角度对齐即可
+            dist = np.exp(-np.abs(z_complex)) 
+            # 这里的角度是指 Goal 在机器人坐标系下的角度？还是世界坐标系？
+            # PPO 训练时通常是 goal_pos - agent_pos，然后旋转到 agent frame
+            # 简单起见，我们保持原逻辑，这通常影响不大，核心是 Lidar 和 Vel
+            goal_vec = np.array([dist, np.cos(angle_to_goal), np.sin(angle_to_goal)])
+            
+            # C. Sensor (Velocity) - 🔥 核心修正：使用 Local Velocity
+            # 假设机器人沿着车头移动，那么本地 x 速度 = Speed，y 速度 = 0
+            # 这模拟了 "正向前进" 的状态，消除了侧向漂移带来的不对称
+            vel_input = np.array([MANUAL_SPEED, 0.0])
+            
+            acc = np.zeros(2)      
+            gyro = np.zeros(1)     
+            mag = vec[:2] / (np.linalg.norm(vec[:2]) + 1e-8) 
+            
+            sensor_vec = np.concatenate([acc, vel_input, gyro, mag])
+            
+            # D. 拼装
+            obs = np.concatenate([sensor_vec, goal_vec, lidar])
+            
+            # --- 3. 预测 ---
+            obs_tensor = torch.from_numpy(obs).float().to(device)
+            obs_norm = (obs_tensor - mins) / (maxs - mins)
+            obs_norm = 2 * obs_norm - 1
+            obs_norm = torch.clamp(obs_norm, -5.0, 5.0)
+            
+            with torch.no_grad():
+                cbf_out = model(obs_norm.unsqueeze(0))
+                Z[i, j] = cbf_out.item()
 
-    # 5. 绘图
-    print(f"📊 Stats: Min={Z.min():.4f}, Max={Z.max():.4f}")
+    # --- 🎨 画图 (恢复 V2 干净风格) ---
+    plt.figure(figsize=(10, 10))
+    ax = plt.gca()
     
-    fig, ax = plt.subplots(figsize=(9, 9))
+    # 区域填充
+    levels = [Z.min(), 0, SAFETY_MARGIN, Z.max()]
+    plt.contourf(X, Y, Z, levels=[-100, 0], colors=['#FF9999'], alpha=0.8) # Unsafe (红)
+    plt.contourf(X, Y, Z, levels=[0, SAFETY_MARGIN], colors=['#FFFF99'], alpha=0.8) # Buffer (黄)
+    plt.contourf(X, Y, Z, levels=[SAFETY_MARGIN, 100], colors=['#99CCFF'], alpha=0.6) # Safe (蓝)
     
-    # 绘制背景
-    # 使用 RdYlGn (红-黄-绿)，以 0 为中心
-    # 使用 TwoSlopeNorm 来确保 0 对应白色或黄色，负数红，正数绿
-    import matplotlib.colors as mcolors
-    divnorm = mcolors.TwoSlopeNorm(vmin=Z.min(), vcenter=0., vmax=Z.max())
+    # 边界线
+    cs_0 = plt.contour(X, Y, Z, levels=[0.0], colors='blue', linewidths=2, linestyles='solid')
+    plt.clabel(cs_0, fmt={0.0: 'h(x)=0'}, inline=True, fontsize=12)
     
-    im = ax.imshow(Z, extent=[-1.5, 1.5, -1.5, 1.5], origin='lower', 
-                   cmap='RdYlGn', norm=divnorm, alpha=0.6)
-    plt.colorbar(im, label='CBF Value h(x)')
+    cs_margin = plt.contour(X, Y, Z, levels=[SAFETY_MARGIN], colors='grey', linewidths=2, linestyles='dotted')
+    plt.clabel(cs_margin, fmt={SAFETY_MARGIN: f'margin={SAFETY_MARGIN}'}, inline=True, fontsize=10)
 
-    # 绘制边界线
-    width = 0.1
-    # 绘制 h(x)=0 (决策边界)
-    ax.contour(X, Y, Z, levels=[0], colors='blue', linewidths=2.5, linestyles='solid')
-    # 绘制 h(x)=+/-0.1 (缓冲区)
-    ax.contour(X, Y, Z, levels=[-width, width], colors='grey', linewidths=1.5, linestyles='dashed')
-
-    # 绘制真实障碍物
-    for hz in hazards_pos:
-        # 物理体积 (Keepout 区域)
-        circle = plt.Circle((hz[0], hz[1]), 0.18, color='red', alpha=0.5, label='Hazard')
+    # 障碍物
+    for obs in OBSTACLES:
+        circle = plt.Circle(obs, 0.2, color='black', alpha=0.6)
         ax.add_patch(circle)
-        # 轮廓
-        circle_edge = plt.Circle((hz[0], hz[1]), 0.18, color='black', fill=False, linewidth=2)
-        ax.add_patch(circle_edge)
+        plt.text(obs[0], obs[1], 'OBS', ha='center', va='center', color='white', fontweight='bold')
+        
+    # 终点
+    plt.scatter(GOAL[0], GOAL[1], marker='*', s=300, c='gold', edgecolors='black', label='Goal', zorder=10)
     
-    ax.plot(goal_pos[0], goal_pos[1], 'g*', markersize=18, markeredgecolor='k', label='Goal')
+    # 速度方向箭头 (保留这个很有用，能让你知道现在的设定方向)
+    if MANUAL_HEADING is not None and MANUAL_SPEED > 0:
+        arrow_len = 0.3
+        # 画在原点或者终点附近
+        center_x, center_y = 0.0, 0.0
+        plt.arrow(center_x, center_y, arrow_len*np.cos(MANUAL_HEADING), arrow_len*np.sin(MANUAL_HEADING), 
+                  width=0.02, color='purple', label='Current Heading', zorder=20)
 
-    ax.set_xlim(-1.5, 1.5)
-    ax.set_ylim(-1.5, 1.5)
-    ax.set_title(f"CBF Safety Landscape\nBlue Line: Learned Boundary (h=0)")
-    ax.set_xlabel("X Position")
-    ax.set_ylabel("Y Position")
+    plt.title(f"CBF Landscape (Speed={MANUAL_SPEED}, Heading={MANUAL_HEADING:.2f})\nRed=Unsafe, Yellow=Buffer, Blue=Safe", fontsize=14)
+    plt.xlabel("X Position")
+    plt.ylabel("Y Position")
+    plt.xlim(-1.5, 1.5)
+    plt.ylim(-1.5, 1.5)
+    plt.grid(True, alpha=0.3, linestyle='--')
+    
+    # 图例
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='#FF9999', edgecolor='none', label='Unsafe (h < 0)'),
+        Patch(facecolor='#FFFF99', edgecolor='none', label='Buffer (0 < h < margin)'),
+        Patch(facecolor='#99CCFF', edgecolor='none', label='Safe (h > margin)'),
+        plt.Line2D([0], [0], color='blue', lw=2, label='Boundary h(x)=0'),
+    ]
+    plt.legend(handles=legend_elements, loc='upper right')
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    print(f"✅ Success! Map saved to {save_path}")
+    plt.savefig(f'cbf_landscape_speed_{MANUAL_SPEED}.png')
+    print(f"✅ 图表已保存: cbf_landscape_speed_{MANUAL_SPEED}.png")
     plt.show()
 
 if __name__ == '__main__':
-    plot_god_mode()
+    visualize_landscape_final()

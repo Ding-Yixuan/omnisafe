@@ -92,7 +92,8 @@ def find_actor(obj, depth=0):
 # 请确保这里指向你训练好的模型文件夹
 LOG_DIR = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-10-21-13-01'
 # runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-07-19-09-38
-VIDEO_FILENAME = "safe_navigation_26dim.mp4"
+# runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-09-17-49-50
+VIDEO_FILENAME = "./看loss曲线/ppolag_测试data/safe_navigation_26dim.mp4"
 MAX_STEPS = 2000  
 CAMERA_NAME = 'fixedfar' 
 # ===========================================
@@ -108,8 +109,8 @@ def main():
     try:
         evaluator.load_saved(save_dir=LOG_DIR, model_name=model_name, camera_name=CAMERA_NAME)
     except:
-        print(f"⚠️ {model_name} 不存在，尝试 epoch-10.pt")
-        evaluator.load_saved(save_dir=LOG_DIR, model_name='epoch-500.pt', camera_name=CAMERA_NAME)
+        print(f"⚠️ {model_name} 不存在，尝试 epoch-500.pt")
+        evaluator.load_saved(save_dir=LOG_DIR, model_name='epoch-450.pt', camera_name=CAMERA_NAME)
     
     env = evaluator._env
     
