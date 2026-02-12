@@ -9,16 +9,16 @@ import matplotlib.pyplot as plt
 # 1. 配置参数
 # =================================================================
 CONFIG = {
-    'dataset_path': './data_pro/ppolag_测试data.npz',  # 你的数据路径
-    'horizon': 64,          # 规划视界：一次生成多少步 (H)
+    'dataset_path': './data_pro/ppolag_256.npz',
+    'horizon': 64,          # 一次生成64步 (H)
     'obs_dim': 26,          # 观测维度
     'act_dim': 2,           # 动作维度
     'hidden_dim': 256,      # 网络隐藏层维度
-    'train_steps': 50000,  # 训练步数 (不是 Epoch，是 Gradient Steps)
-    'batch_size': 256,      # 批次大小
-    'lr': 2e-4,             # 学习率
-    'device': 'cuda:0',     # 设备
-    'save_dir': './看loss曲线/ppolag_测试data',  # 模型保存路径
+    'train_steps': 50000,  # 训练步数 Gradient Steps
+    'batch_size': 256,     
+    'lr': 2e-4,             
+    'device': 'cuda:0',     
+    'save_dir': './看loss曲线/ppolag_256',
 }
 
 # =================================================================
@@ -26,7 +26,7 @@ CONFIG = {
 # =================================================================
 class TrajectoryDataset(Dataset):
     def __init__(self, data_path, horizon=64):
-        print(f"📂 Loading data from {data_path}...")
+        print(f"Loading data from {data_path}...")
         raw_data = np.load(data_path)
         
         # 提取核心数据

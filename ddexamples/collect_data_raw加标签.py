@@ -210,15 +210,15 @@ class PPO_Inference_Agent(nn.Module):
 # =================================================================
 def collect():
     # ================= 配置 =================
-    AGENT_PATH = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-10-21-13-01/torch_save/epoch-450.pt'
-    SAVE_PATH = './data_pro/ppolag_测试data.npz'
+    AGENT_PATH = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-10-21-13-01/torch_save/epoch-500.pt'
+    SAVE_PATH = './data_pro/ppolag_256.npz'
     MAX_STEPS = 50000
     TTC_THRESHOLD = 1.0  # 安全阈值
     
     # 1. 加载 Agent
     print(f"🔄 手动组装 Agent from {AGENT_PATH}...")
     ckpt = torch.load(AGENT_PATH, map_location='cpu')
-    agent = PPO_Inference_Agent(obs_dim=26, act_dim=2, hidden_sizes=[64, 64])
+    agent = PPO_Inference_Agent(obs_dim=26, act_dim=2, hidden_sizes=[256, 256])
     agent.load_from_dict(ckpt)
     
     # 2. 创建环境

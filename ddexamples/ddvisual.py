@@ -90,10 +90,10 @@ def find_actor(obj, depth=0):
 
 # ================= 配置区域 =================
 # 请确保这里指向你训练好的模型文件夹
-LOG_DIR = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-10-21-13-01'
+LOG_DIR = './runs/PPO-{SafetyPointGoal1-v0}/seed-000-2026-02-11-21-17-42'
 # runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-07-19-09-38
 # runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-09-17-49-50
-VIDEO_FILENAME = "./看loss曲线/ppolag_测试data/safe_navigation_26dim.mp4"
+VIDEO_FILENAME = "./看ppo/safe_navigation_26dim.mp4"
 MAX_STEPS = 2000  
 CAMERA_NAME = 'fixedfar' 
 # ===========================================

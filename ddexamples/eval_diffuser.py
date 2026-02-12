@@ -163,9 +163,9 @@ class DiffusionSampler:
 # =================================================================
 if __name__ == '__main__':
     # 配置
-    MODEL_PATH = './看loss曲线/ppolag_升级版/diffuser_ema_step_100000.pt'
-    NORM_PATH = './看loss曲线/ppolag_升级版/normalization.npz'
-    VIDEO_PATH = './看loss曲线/ppolag_升级版/diffuser_godview.mp4'
+    MODEL_PATH = './看loss曲线/ppolag_256/diffuser_step_50000.pt'
+    NORM_PATH = './看loss曲线/ppolag_256/normalization.npz'
+    VIDEO_PATH = './看loss曲线/ppolag_256/diffuser_godview.mp4'
     
     device = 'cuda:0'
     

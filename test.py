@@ -328,41 +328,41 @@
 # else:
 #     print("没有找到安全的 Epoch，建议放宽 Cost 筛选条件或检查训练。")
 
-import numpy as np
+# import numpy as np
 
-# 1. 加载数据 (确保路径对)
-data_path = './data_pro/ppolag_zuida.npz'
-print(f"📂 正在读取: {data_path}")
-data = np.load(data_path)
+# # 1. 加载数据 (确保路径对)
+# data_path = './data_pro/ppolag_zuida.npz'
+# print(f"📂 正在读取: {data_path}")
+# data = np.load(data_path)
 
-# 2. 获取 segment_id
-seg_ids = data['segment_id']
-unique_segs = np.unique(seg_ids)
+# # 2. 获取 segment_id
+# seg_ids = data['segment_id']
+# unique_segs = np.unique(seg_ids)
 
-print(f"\n📊 总共发现 {len(unique_segs)} 条轨迹片段")
-print("="*40)
-print(f"{'ID':<5} | {'Length (Steps)':<15} | {'Status'}")
-print("-" * 40)
+# print(f"\n📊 总共发现 {len(unique_segs)} 条轨迹片段")
+# print("="*40)
+# print(f"{'ID':<5} | {'Length (Steps)':<15} | {'Status'}")
+# print("-" * 40)
 
-# 3. 循环打印每一条的长度
-lengths = []
-for seg_id in unique_segs:
-    # 计算当前 segment 的长度
-    seg_len = np.sum(seg_ids == seg_id)
-    lengths.append(seg_len)
+# # 3. 循环打印每一条的长度
+# lengths = []
+# for seg_id in unique_segs:
+#     # 计算当前 segment 的长度
+#     seg_len = np.sum(seg_ids == seg_id)
+#     lengths.append(seg_len)
     
-    # 简单的评价
-    status = ""
-    if seg_len < 50: status = "⚡️ 极速"
-    elif seg_len > 1000: status = "🐢 超时/徘徊"
-    elif seg_len > 500: status = "🤔 较慢"
+#     # 简单的评价
+#     status = ""
+#     if seg_len < 50: status = "⚡️ 极速"
+#     elif seg_len > 1000: status = "🐢 超时/徘徊"
+#     elif seg_len > 500: status = "🤔 较慢"
     
-    print(f"{seg_id:<5} | {seg_len:<15} | {status}")
+#     print(f"{seg_id:<5} | {seg_len:<15} | {status}")
 
-print("="*40)
-print(f"平均轨迹长度: {np.mean(lengths):.2f} 步")
-print(f"最短: {np.min(lengths)} 步")
-print(f"最长: {np.max(lengths)} 步")
+# print("="*40)
+# print(f"平均轨迹长度: {np.mean(lengths):.2f} 步")
+# print(f"最短: {np.min(lengths)} 步")
+# print(f"最长: {np.max(lengths)} 步")
 
 # import torch
 # import numpy as np
@@ -627,3 +627,64 @@ print(f"最长: {np.max(lengths)} 步")
 
 # if __name__ == '__main__':
 #     verify_geometry()
+
+import safety_gymnasium
+import pprint
+
+def deep_inspect():
+    print("正在初始化环境...")
+    env = safety_gymnasium.make('SafetyPointGoal1-v0')
+    
+    # 1. 解包到最底层
+    task = env.unwrapped.task
+    agent = task.agent
+    
+    print("\n" + "="*40)
+    print("🕵️‍♂️ 开始深度搜索 'lidar' 参数...")
+    print("="*40)
+
+    # -------------------------------------------------
+    # 方法 A: 检查 Agent 的配置对象 (Common in SafetyGymnasium)
+    # -------------------------------------------------
+    if hasattr(agent, 'conf'):
+        print("\n[Location A] Found 'agent.conf':")
+        # 遍历 conf 里的属性
+        for key in dir(agent.conf):
+            if 'lidar' in key and not key.startswith('__'):
+                val = getattr(agent.conf, key)
+                print(f"  - agent.conf.{key} = {val}")
+
+    # -------------------------------------------------
+    # 方法 B: 暴力遍历 Agent 的所有属性
+    # -------------------------------------------------
+    print("\n[Location B] Scanning all 'agent' attributes:")
+    found = False
+    for attr in dir(agent):
+        if 'lidar' in attr.lower():
+            try:
+                val = getattr(agent, attr)
+                # 过滤掉函数，只看数值
+                if not callable(val):
+                    print(f"  - agent.{attr} = {val}")
+                    found = True
+            except:
+                pass
+    
+    if not found:
+        print("  (None found directly on agent)")
+
+    # -------------------------------------------------
+    # 方法 C: 检查 Task 级别的配置
+    # -------------------------------------------------
+    print("\n[Location C] Scanning 'task' attributes:")
+    for attr in dir(task):
+        if 'lidar' in attr.lower():
+            try:
+                val = getattr(task, attr)
+                if not callable(val):
+                    print(f"  - task.{attr} = {val}")
+            except:
+                pass
+
+if __name__ == "__main__":
+    deep_inspect()
