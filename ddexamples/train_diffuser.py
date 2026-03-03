@@ -1,15 +1,18 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import os
 from torch.utils.data import Dataset, DataLoader
-import matplotlib.pyplot as plt
+
 
 # =================================================================
 # 1. 配置参数
 # =================================================================
 CONFIG = {
-    'dataset_path': './data_pro/ppolag_256.npz',
+    'dataset_path': './data_pro/data_ppolag_exp.npz',
     'horizon': 64,          # 一次生成64步 (H)
     'obs_dim': 26,          # 观测维度
     'act_dim': 2,           # 动作维度
@@ -18,7 +21,7 @@ CONFIG = {
     'batch_size': 256,     
     'lr': 2e-4,             
     'device': 'cuda:0',     
-    'save_dir': './看loss曲线/ppolag_256',
+    'save_dir': './diffuser_models/ppolag_exp',
 }
 
 # =================================================================

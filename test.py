@@ -628,63 +628,351 @@
 # if __name__ == '__main__':
 #     verify_geometry()
 
+# import safety_gymnasium
+# import pprint
+
+# def deep_inspect():
+#     print("正在初始化环境...")
+#     env = safety_gymnasium.make('SafetyPointGoal1-v0')
+    
+#     # 1. 解包到最底层
+#     task = env.unwrapped.task
+#     agent = task.agent
+    
+#     print("\n" + "="*40)
+#     print("🕵️‍♂️ 开始深度搜索 'lidar' 参数...")
+#     print("="*40)
+
+#     # -------------------------------------------------
+#     # 方法 A: 检查 Agent 的配置对象 (Common in SafetyGymnasium)
+#     # -------------------------------------------------
+#     if hasattr(agent, 'conf'):
+#         print("\n[Location A] Found 'agent.conf':")
+#         # 遍历 conf 里的属性
+#         for key in dir(agent.conf):
+#             if 'lidar' in key and not key.startswith('__'):
+#                 val = getattr(agent.conf, key)
+#                 print(f"  - agent.conf.{key} = {val}")
+
+#     # -------------------------------------------------
+#     # 方法 B: 暴力遍历 Agent 的所有属性
+#     # -------------------------------------------------
+#     print("\n[Location B] Scanning all 'agent' attributes:")
+#     found = False
+#     for attr in dir(agent):
+#         if 'lidar' in attr.lower():
+#             try:
+#                 val = getattr(agent, attr)
+#                 # 过滤掉函数，只看数值
+#                 if not callable(val):
+#                     print(f"  - agent.{attr} = {val}")
+#                     found = True
+#             except:
+#                 pass
+    
+#     if not found:
+#         print("  (None found directly on agent)")
+
+#     # -------------------------------------------------
+#     # 方法 C: 检查 Task 级别的配置
+#     # -------------------------------------------------
+#     print("\n[Location C] Scanning 'task' attributes:")
+#     for attr in dir(task):
+#         if 'lidar' in attr.lower():
+#             try:
+#                 val = getattr(task, attr)
+#                 if not callable(val):
+#                     print(f"  - task.{attr} = {val}")
+#             except:
+#                 pass
+
+# if __name__ == "__main__":
+#     deep_inspect()
+
+# import safety_gymnasium
+# import inspect
+# import numpy as np
+
+# def inspect_goal_compass():
+#     print("="*60)
+#     print("��️‍♂️ 正在寻找官方 'Goal Compass' (_obs_compass) 的源码...")
+#     print("="*60)
+    
+#     # 1. 初始化一个环境
+#     env = safety_gymnasium.make('SafetyPointGoal1-v0')
+#     task = env.unwrapped.task
+    
+#     # 2. 尝试获取 _obs_compass 的源码
+#     try:
+#         # _obs_compass 通常定义在 BaseTask 或其父类中
+#         if hasattr(task, '_obs_compass'):
+#             func = task._obs_compass
+#             code = inspect.getsource(func)
+#             print(f"✅ 找到了！函数名: {func.__name__}")
+#             print("-" * 40)
+#             print(code)
+#             print("-" * 40)
+#         else:
+#             print("❌ 在 task 下没找到 _obs_compass，可能改名了？")
+            
+#     except Exception as e:
+#         print(f"❌ 读取源码失败: {e}")
+
+#     print("\n�� 解读：")
+#     print("如果代码里是 'pos - self.agent.pos' (减法)，那就是线性的 -> �� 聪明")
+#     print("如果代码里有 'np.exp' (指数)，那就是非线性的 -> �� 蠢笨")
+#     print("="*60)
+
+# if __name__ == "__main__":
+#     inspect_goal_compass()
+
+# import os
+# import torch
+# import numpy as np
+# import imageio
+# import omnisafe
+# import safety_gymnasium
+# import gymnasium
+# from safety_gymnasium.assets.geoms import Hazards
+# # 引入原始类
+# from safety_gymnasium.tasks.safe_navigation.goal.goal_level1 import GoalLevel1
+# from safety_gymnasium.tasks.safe_navigation.goal.goal_level0 import GoalLevel0
+
+# # =================================================================
+# # 1. 【核心】重新植入 Patch (必须与训练时完全一致！)
+# # =================================================================
+
+# def patched_init(self, config):
+#     """复现训练时的环境设置"""
+#     self.lidar_num_bins = 16
+#     self.lidar_max_dist = 3.0
+#     self.sensors_obs = ['accelerometer', 'velocimeter', 'gyro', 'magnetometer']
+#     self.task_name = 'GoalLevel1_Reproduction'
+    
+#     config.update({
+#         'lidar_num_bins': 16,
+#         'lidar_max_dist': 3.0,
+#         'sensors_obs': self.sensors_obs,
+#         'task_name': self.task_name
+#     })
+    
+#     GoalLevel0.__init__(self, config=config)
+    
+#     # 修改环境: 2 Hazards
+#     self.placements_conf.extents = [-1.5, -1.5, 1.5, 1.5]
+#     self._add_geoms(Hazards(num=2, keepout=0.2))
+
+# def patched_build_observation_space(self):
+#     self.observation_space = gymnasium.spaces.Box(
+#         low=-np.inf, high=np.inf, shape=(26,), dtype=np.float32
+#     )
+
+# def patched_obs(self):
+#     """
+#     【关键】这里必须是你刚才改过的 Linear 版本
+#     """
+#     # 1. Hazard Lidar (16维)
+#     lidar_vec = self._obs_lidar(self.hazards.pos, self.hazards.group) 
+    
+#     # 2. Sensors (7维)
+#     acc = self.agent.get_sensor('accelerometer')[:2]
+#     vel = self.agent.get_sensor('velocimeter')[:2]
+#     gyro = self.agent.get_sensor('gyro')[-1:]
+#     mag = self.agent.get_sensor('magnetometer')[:2]
+#     sensor_vec = np.concatenate([acc, vel, gyro, mag])
+
+#     # 3. Goal (3维) - 使用线性距离！
+#     vec = (self.goal.pos - self.agent.pos) @ self.agent.mat
+#     x, y = vec[0], vec[1]
+    
+#     # --- 你的 Linear 修改 ---
+#     z = x + 1j * y
+#     dist = np.abs(z) / 10.0  # 线性！
+#     angle = np.angle(z)
+    
+#     goal_vec = np.array([dist, np.cos(angle), np.sin(angle)])
+
+#     # 4. 拼接 (26维)
+#     flat_obs = np.concatenate([sensor_vec, goal_vec, lidar_vec]).astype(np.float32)
+#     return flat_obs
+
+# # 应用补丁
+# GoalLevel1.__init__ = patched_init
+# GoalLevel1.build_observation_space = patched_build_observation_space
+# GoalLevel1.obs = patched_obs
+# print("✅ Monkey Patch 已就绪 (26维 Linear模式)")
+
+# # =================================================================
+# # 2. 配置路径
+# # =================================================================
+
+# # �� 请修改这里！指向你刚才训练结束的文件夹
+# # 比如: runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2023-10-xx-xx-xx
+# LOG_DIR = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-17-19-59-08' 
+
+# # 视频保存名字
+# VIDEO_NAME = 'linear_goal_result.mp4'
+
+# # =================================================================
+# # 3. 开始录制
+# # =================================================================
+
+# def main():
+#     # 1. 加载模型
+#     print(f"正在加载模型: {LOG_DIR}")
+#     evaluator = omnisafe.Evaluator(render_mode='rgb_array')
+    
+#     # 注意：确保 model.pt 存在，或者改成 epoch-499.pt / epoch-500.pt
+#     # evaluator.load_saved 会把模型加载到 evaluator._actor 中
+#     try:
+#         evaluator.load_saved(save_dir=LOG_DIR, model_name='model.pt', camera_name='fixedfar')
+#     except Exception as e:
+#         print(f"⚠️ model.pt 加载失败 ({e})，尝试加载 epoch-499.pt...")
+#         evaluator.load_saved(save_dir=LOG_DIR, model_name='epoch-500.pt', camera_name='fixedfar')
+    
+#     # =========================================================
+#     # ��️ 修复点：正确获取 Actor 网络
+#     # =========================================================
+#     actor = None
+    
+#     # 1. 尝试直接获取私有属性 _actor (OmniSafe 标准位置)
+#     if hasattr(evaluator, '_actor') and evaluator._actor is not None:
+#         print("✅ 成功在 evaluator._actor 找到策略网络")
+#         actor = evaluator._actor
+        
+#     # 2. 尝试获取 actor 公共属性
+#     elif hasattr(evaluator, 'actor') and evaluator.actor is not None:
+#         print("✅ 成功在 evaluator.actor 找到策略网络")
+#         actor = evaluator.actor
+        
+#     # 3. 暴力递归查找 (作为最后的备选)
+#     else:
+#         print("⚠️ 属性未直接找到，尝试递归搜索...")
+#         def find_actor_recursive(obj, depth=0):
+#             if depth > 3: return None
+#             # 必须包含 predict 或 act 方法
+#             if (hasattr(obj, 'predict') or hasattr(obj, 'act')) and not isinstance(obj, omnisafe.Evaluator):
+#                 return obj
+#             for key in dir(obj):
+#                 if key.startswith('__'): continue
+#                 try:
+#                     val = getattr(obj, key)
+#                     # 排除基础类型
+#                     if isinstance(val, (int, float, str, bool, list, dict)): continue
+#                     res = find_actor_recursive(val, depth + 1)
+#                     if res: return res
+#                 except: pass
+#             return None
+            
+#         actor = find_actor_recursive(evaluator)
+
+#     if actor is None:
+#         # 如果还是找不到，可能是 load_saved 没成功
+#         raise RuntimeError("❌ 无法找到 Actor 网络！请检查 LOG_DIR 路径下是否有 .pt 模型文件。")
+
+#     # =========================================================
+    
+#     env = evaluator._env
+#     print(f"环境维度: {env.observation_space.shape}")
+    
+#     # 再次确认维度
+#     assert env.observation_space.shape == (26,), f"❌ 维度不对！期望 (26,) 但得到 {env.observation_space.shape}"
+
+#     # 3. 录制循环
+#     print(f"开始录制视频 -> {VIDEO_NAME}")
+#     obs, _ = env.reset()
+#     frames = []
+    
+#     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#     # 确保 actor 在正确的设备上 (有些版本 load_saved 后在 cpu)
+#     if hasattr(actor, 'to'):
+#         actor.to(device)
+    
+#     total_cost = 0
+    
+#     # 跑 1000 步
+#     for step in range(1000):
+#         try:
+#             frames.append(env.render())
+#         except:
+#             pass # 有些环境 headless 渲染会报错，跳过
+        
+#         # 预测动作
+#         # 预测动作
+#         with torch.no_grad():
+#             obs_t = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to(device)
+            
+#             # (自动兼容单/多返回值的逻辑保持不变)
+#             if hasattr(actor, 'predict'):
+#                 raw_output = actor.predict(obs_t, deterministic=True)
+#             elif hasattr(actor, 'act'):
+#                 raw_output = actor.act(obs_t, deterministic=True)
+#             else:
+#                 raw_output = actor(obs_t)
+            
+#             if isinstance(raw_output, tuple):
+#                 action = raw_output[0]
+#             else:
+#                 action = raw_output
+
+#             # =========================================================
+#             # ��️ 修复点：不要转 .numpy()！保持 Tensor！
+#             # =========================================================
+#             # ❌ 删除这行 (或注释掉):
+#             # if isinstance(action, torch.Tensor):
+#             #     action = action.cpu().numpy().squeeze()
+
+#             # ✅ 改为这样：只去掉 batch 维度，但保持是 Tensor
+#             if isinstance(action, torch.Tensor):
+#                 action = action.squeeze(0).cpu()  # (1, dim) -> (dim)
+#                 # 注意：wrapper 里的参数通常和 actor 在同一个 device 上
+#                 # 如果报错 "Expected all tensors to be on the same device"，
+#                 # 请尝试加上 .cpu()，即: action = action.squeeze(0).cpu()
+#                 # 但根据你的报错，它想要 Tensor，所以先只做 squeeze
+#             # =========================================================
+
+            
+#         # 执行
+#         obs, reward, cost, terminated, truncated, info = env.step(action)
+        
+#         if hasattr(cost, 'item'): cost = cost.item()
+#         total_cost += cost
+        
+#         if step % 100 == 0:
+#             print(f"Step {step}: Reward={reward:.4f}, Cost={cost:.4f}, TotalCost={total_cost:.1f}")
+            
+#         if terminated or truncated:
+#             print("回合结束")
+#             break
+            
+#     # 4. 保存视频
+#     print("正在编码 MP4...")
+#     imageio.mimsave(VIDEO_NAME, frames, fps=30)
+#     print(f"✅ 视频已保存: {os.path.abspath(VIDEO_NAME)}")
+
+# if __name__ == '__main__':
+#     main()
+
+
 import safety_gymnasium
-import pprint
+import inspect
+from safety_gymnasium.tasks.safe_navigation.goal.goal_level0 import GoalLevel0
 
-def deep_inspect():
-    print("正在初始化环境...")
-    env = safety_gymnasium.make('SafetyPointGoal1-v0')
+def check_reward_code():
+    print("="*60)
+    print("🔍 正在读取官方 Goal 任务的 Reward (奖励) 源代码...")
+    print("="*60)
     
-    # 1. 解包到最底层
-    task = env.unwrapped.task
-    agent = task.agent
-    
-    print("\n" + "="*40)
-    print("🕵️‍♂️ 开始深度搜索 'lidar' 参数...")
-    print("="*40)
+    try:
+        # 在 Safety Gymnasium 中，奖励计算通常在 calculate_reward 方法里
+        source_code = inspect.getsource(GoalLevel0.calculate_reward)
+        print(source_code)
+    except Exception as e:
+        print(f"读取失败: {e}")
 
-    # -------------------------------------------------
-    # 方法 A: 检查 Agent 的配置对象 (Common in SafetyGymnasium)
-    # -------------------------------------------------
-    if hasattr(agent, 'conf'):
-        print("\n[Location A] Found 'agent.conf':")
-        # 遍历 conf 里的属性
-        for key in dir(agent.conf):
-            if 'lidar' in key and not key.startswith('__'):
-                val = getattr(agent.conf, key)
-                print(f"  - agent.conf.{key} = {val}")
-
-    # -------------------------------------------------
-    # 方法 B: 暴力遍历 Agent 的所有属性
-    # -------------------------------------------------
-    print("\n[Location B] Scanning all 'agent' attributes:")
-    found = False
-    for attr in dir(agent):
-        if 'lidar' in attr.lower():
-            try:
-                val = getattr(agent, attr)
-                # 过滤掉函数，只看数值
-                if not callable(val):
-                    print(f"  - agent.{attr} = {val}")
-                    found = True
-            except:
-                pass
-    
-    if not found:
-        print("  (None found directly on agent)")
-
-    # -------------------------------------------------
-    # 方法 C: 检查 Task 级别的配置
-    # -------------------------------------------------
-    print("\n[Location C] Scanning 'task' attributes:")
-    for attr in dir(task):
-        if 'lidar' in attr.lower():
-            try:
-                val = getattr(task, attr)
-                if not callable(val):
-                    print(f"  - task.{attr} = {val}")
-            except:
-                pass
+    print("="*60)
+    print("💡 重点寻找：last_dist_goal (上一步距离) 和 dist_goal() (当前距离)")
+    print("="*60)
 
 if __name__ == "__main__":
-    deep_inspect()
+    check_reward_code()

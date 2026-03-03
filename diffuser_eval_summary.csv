@@ -1,0 +1,3 @@
+Model,Episodes,Reward_Mean,Reward_Std,Cost_Mean,Cost_Std,Reward (Mean ± Std),Cost (Mean ± Std)
+Diffuser (PPOLag_Expert),50,5.804957605623693,1.9671430208093048,16.6,24.781444671366522,5.80 ± 1.97,16.60 ± 24.78
+Diffuser (PPO_Expert),50,6.845429997364236,4.616410156225052,20.64,17.932941755328375,6.85 ± 4.62,20.64 ± 17.93

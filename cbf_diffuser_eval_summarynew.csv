@@ -1,0 +1,2 @@
+Model,Episodes,Reward_Mean,Reward_Std,Cost_Mean,Cost_Std,Reward (Mean ± Std),Cost (Mean ± Std)
+Diffuser (Diffuser_CBF (PPOLag)),50,4.119969087072418,2.1183146938491233,31.5,37.17539508868735,4.12 ± 2.12,31.50 ± 37.18

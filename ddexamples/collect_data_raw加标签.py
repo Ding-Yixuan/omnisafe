@@ -32,6 +32,7 @@ def patched_obs(self):
     vec = (self.goal.pos - self.agent.pos) @ self.agent.mat
     x, y = vec[0], vec[1]
     z = x + 1j * y
+    dist = np.abs(z)
     dist = np.exp(-np.abs(z)) 
     angle = np.angle(z)
     goal_vec = np.array([dist, np.cos(angle), np.sin(angle)])
@@ -210,10 +211,11 @@ class PPO_Inference_Agent(nn.Module):
 # =================================================================
 def collect():
     # ================= 配置 =================
-    AGENT_PATH = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-10-21-13-01/torch_save/epoch-500.pt'
-    SAVE_PATH = './data_pro/ppolag_256.npz'
+    AGENT_PATH = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-17-19-59-08/torch_save/epoch-500.pt'
+    # runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-17-19-59-08
+    SAVE_PATH = './data_pro/ppolag_xianxing.npz'
     MAX_STEPS = 50000
-    TTC_THRESHOLD = 1.0  # 安全阈值
+    TTC_THRESHOLD = 1.0  # 安全阈值1秒钟
     
     # 1. 加载 Agent
     print(f"🔄 手动组装 Agent from {AGENT_PATH}...")
