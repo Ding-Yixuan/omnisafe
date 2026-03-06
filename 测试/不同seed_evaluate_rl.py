@@ -1,4 +1,5 @@
 import os
+import glob
 import torch
 import numpy as np
 import pandas as pd
@@ -51,10 +52,10 @@ GoalLevel1.obs = patched_obs
 print("✅ 评估环境 Monkey Patch 成功 (26维 exp 模式)")
 
 # =================================================================
-# 2. 评估函数 (返回所有回合的明细数据)
+# 2. 单个模型的评估函数 (🔥 修改：只返回原始列表，不在内部算均值)
 # =================================================================
-def evaluate_policy(log_dir, model_name="PPO", num_episodes=50):
-    print(f"\n🚀 开始评估模型: {model_name} -> {log_dir}")
+def evaluate_single_seed(log_dir, model_name, seed_name, num_episodes=50):
+    print(f"\n🚀 正在评估: {model_name} (Seed: {seed_name}) -> {log_dir}")
     
     evaluator = omnisafe.Evaluator(render_mode='rgb_array')
     
@@ -78,8 +79,6 @@ def evaluate_policy(log_dir, model_name="PPO", num_episodes=50):
 
     ep_returns = []
     ep_costs = []
-    
-    # 用于记录明细的列表
     details_list = []
 
     for ep in range(num_episodes):
@@ -98,7 +97,7 @@ def evaluate_policy(log_dir, model_name="PPO", num_episodes=50):
                 action = raw_out[0] if isinstance(raw_out, tuple) else raw_out
                 action_tensor = action.squeeze(0).cpu()
 
-            obs, reward, cost, terminated, truncated, info = env.step(action_tensor) # ✅ 传入 Tensor
+            obs, reward, cost, terminated, truncated, info = env.step(action_tensor) 
             
             ep_ret += reward
             ep_cost += cost.item() if hasattr(cost, 'item') else cost
@@ -109,123 +108,101 @@ def evaluate_policy(log_dir, model_name="PPO", num_episodes=50):
         ep_returns.append(ep_ret)
         ep_costs.append(ep_cost)
         
-        # 存入明细
+        # 存入明细，增加 Seed 标识
         details_list.append({
             'Model': model_name,
+            'Seed_Dir': seed_name,
             'Episode': ep + 1,
             'Reward': ep_ret,
             'Cost': ep_cost
         })
         
-        print(f"  Episode {ep+1:02d}/{num_episodes} | Return: {ep_ret:6.2f} | Cost: {ep_cost:6.2f}")
-
-    mean_ret, std_ret = np.mean(ep_returns), np.std(ep_returns)
-    mean_cost, std_cost = np.mean(ep_costs), np.std(ep_costs)
-
-    print("\n" + "="*50)
-    print(f"📊 {model_name} 评估结果 ({num_episodes} Episodes):")
-    print(f"  🏆 Reward: {mean_ret:.2f} ± {std_ret:.2f}")
-    print(f"  ⚠️ Cost:   {mean_cost:.2f} ± {std_cost:.2f}")
-    print("="*50)
-    
-    # 汇总数据字典
-    summary_data = {
-        'Model': model_name,
-        'Episodes': num_episodes,
-        'Reward_Mean': mean_ret,
-        'Reward_Std': std_ret,
-        'Cost_Mean': mean_cost,
-        'Cost_Std': std_cost
-    }
-    
-    return summary_data, details_list
+    return ep_returns, ep_costs, details_list
 
 # =================================================================
-# 3. 主程序：批量评估并存入 CSV
-# =================================================================
-# if __name__ == "__main__":
-#     MODELS_TO_EVALUATE = {
-#         "PPO": "./runs/PPO-{SafetyPointGoal1-v0}/seed-000-2026-02-11-21-17-42",
-#         "PPOLag": "./runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-27-18-28-38"
-#     }
-    
-#     NUM_EPISODES = 50 
-    
-#     all_summaries = []
-#     all_details = []
-    
-#     for model_name, path in MODELS_TO_EVALUATE.items():
-#         if os.path.exists(path):
-#             summary, details = evaluate_policy(log_dir=path, model_name=model_name, num_episodes=NUM_EPISODES)
-#             all_summaries.append(summary)
-#             all_details.extend(details)
-#         else:
-#             print(f"\n❌ 路径不存在，跳过 {model_name}: {path}")
-
-#     # ==========================================
-#     # 保存到 CSV
-#     # ==========================================
-#     if all_summaries:
-#         # 1. 保存汇总表格 (用于画论文里的表格)
-#         df_summary = pd.DataFrame(all_summaries)
-#         # 格式化一下，方便直接复制：添加 "Mean ± Std" 列
-#         df_summary['Reward (Mean ± Std)'] = df_summary.apply(lambda row: f"{row['Reward_Mean']:.2f} ± {row['Reward_Std']:.2f}", axis=1)
-#         df_summary['Cost (Mean ± Std)'] = df_summary.apply(lambda row: f"{row['Cost_Mean']:.2f} ± {row['Cost_Std']:.2f}", axis=1)
-        
-#         summary_file = 'rl_eval_summary.csv'
-#         df_summary.to_csv(summary_file, index=False)
-#         print(f"\n✅ 汇总统计已保存至: {summary_file}")
-        
-#         # 2. 保存明细表格 (用于深度分析或画箱线图)
-#         df_details = pd.DataFrame(all_details)
-#         details_file = 'rl_eval_details.csv'
-#         df_details.to_csv(details_file, index=False)
-#         print(f"✅ 回合明细已保存至: {details_file}\n")
-#     else:
-#         print("\n⚠️ 没有找到任何有效模型，未生成 CSV。请检查路径配置！")
-
-
-# =================================================================
-# 3. 主程序：批量评估并存入 CSV
+# 3. 主程序：自动发现同组 Seed 并批量评估
 # =================================================================
 if __name__ == "__main__":
-    MODELS_TO_EVALUATE = {
-        # 把 PPO 注释掉，只保留 PPOLag
-        # "PPO": "./runs/PPO-{SafetyPointGoal1-v0}/seed-000-2026-02-11-21-17-42",
-        "PPOLag": "./runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-03-04-10-49-40costlimit10"
-    }
+    # 🔥 设置包含所有 seed 文件夹的根目录
+    BASE_DIR = "./runs/PPOLag-{SafetyPointGoal1-v0}"
     
-    NUM_EPISODES = 50 
+    # 🔥 设置你要评估的 cost limits
+    COST_LIMITS = [0, 3, 5, 10]
+    
+    NUM_EPISODES_PER_SEED = 50 
     
     all_summaries = []
     all_details = []
     
-    for model_name, path in MODELS_TO_EVALUATE.items():
-        if os.path.exists(path):
-            summary, details = evaluate_policy(log_dir=path, model_name=model_name, num_episodes=NUM_EPISODES)
-            all_summaries.append(summary)
+    for cost in COST_LIMITS:
+        model_name = f"PPOLag_Cost{cost}"
+        
+        # 自动匹配包含该 costlimit 的文件夹 
+        # 例如: seed-*-costlimit3_* search_pattern = os.path.join(BASE_DIR, f"*costlimit{cost}_*")
+        search_pattern = os.path.join(BASE_DIR, f"*costlimit{cost}_*")
+        matched_dirs = glob.glob(search_pattern)
+        
+        if not matched_dirs:
+            print(f"\n⚠️ 找不到 {model_name} 的任何 seed 文件夹，跳过。")
+            continue
+            
+        print(f"\n" + "="*50)
+        print(f"🎯 找到 {model_name} 的 {len(matched_dirs)} 个 Seed 文件夹。开始聚合评估...")
+        print("="*50)
+        
+        combined_returns = []
+        combined_costs = []
+        
+        # 遍历同一个 cost limit 下的所有 seed 文件夹
+        for log_dir in matched_dirs:
+            seed_name = os.path.basename(log_dir).split('-')[1] # 提取如 "000"
+            
+            ep_rets, ep_costs, details = evaluate_single_seed(
+                log_dir=log_dir, 
+                model_name=model_name, 
+                seed_name=seed_name,
+                num_episodes=NUM_EPISODES_PER_SEED
+            )
+            
+            combined_returns.extend(ep_rets)
+            combined_costs.extend(ep_costs)
             all_details.extend(details)
-        else:
-            print(f"\n❌ 路径不存在，跳过 {model_name}: {path}")
+            
+        # 聚合所有的 seed 数据计算总的均值和方差
+        mean_ret, std_ret = np.mean(combined_returns), np.std(combined_returns)
+        mean_cost, std_cost = np.mean(combined_costs), np.std(combined_costs)
+
+        print("\n" + "*"*50)
+        print(f"📊 {model_name} 总体评估结果 ({len(matched_dirs)} Seeds x {NUM_EPISODES_PER_SEED} Eps = {len(combined_returns)} 汇总):")
+        print(f"  🏆 Reward: {mean_ret:.2f} ± {std_ret:.2f}")
+        print(f"  ⚠️ Cost:   {mean_cost:.2f} ± {std_cost:.2f}")
+        print("*"*50)
+        
+        all_summaries.append({
+            'Model': model_name,
+            'Total_Seeds': len(matched_dirs),
+            'Total_Episodes': len(combined_returns),
+            'Reward_Mean': mean_ret,
+            'Reward_Std': std_ret,
+            'Cost_Mean': mean_cost,
+            'Cost_Std': std_cost
+        })
 
     # ==========================================
     # 保存到 CSV
     # ==========================================
     if all_summaries:
-        # 1. 保存汇总表格 (用于画论文里的表格)
         df_summary = pd.DataFrame(all_summaries)
-        # 格式化一下，方便直接复制：添加 "Mean ± Std" 列
         df_summary['Reward (Mean ± Std)'] = df_summary.apply(lambda row: f"{row['Reward_Mean']:.2f} ± {row['Reward_Std']:.2f}", axis=1)
         df_summary['Cost (Mean ± Std)'] = df_summary.apply(lambda row: f"{row['Cost_Mean']:.2f} ± {row['Cost_Std']:.2f}", axis=1)
         
-        summary_file = 'rl_eval_summary10.csv'
+        summary_file = 'rl_eval_summary_combined.csv'
         df_summary.to_csv(summary_file, index=False)
-        print(f"\n✅ 汇总统计已保存至: {summary_file}")
+        print(f"\n✅ 聚合汇总统计已保存至: {summary_file}")
         
-        # 2. 保存明细表格 (用于深度分析或画箱线图)
         df_details = pd.DataFrame(all_details)
-        details_file = 'rl_eval_details_ppolag10.csv'
+        details_file = 'rl_eval_details_combined.csv'
         df_details.to_csv(details_file, index=False)
-        print(f"✅ 回合明细已保存至: {details_file}\n")
+        print(f"✅ 所有 Seed 的回合明细已保存至: {details_file}\n")
     else:
-        print("\n⚠️ 没有找到任何有效模型，未生成 CSV。请检查路径配置！")
+        print("\n⚠️ 未生成 CSV，请检查 BASE_DIR 路径是否正确。")

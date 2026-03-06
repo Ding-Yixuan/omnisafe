@@ -170,7 +170,7 @@ def evaluate_diffuser(model_path, norm_path, label_name, num_episodes=50, device
 
     obs_horizon = 2
     pred_horizon = 16
-    exec_horizon = 8
+    exec_horizon = 1
 
     # 实例化新的条件网络
     model = TemporalUnet(act_dim=2, obs_dim=26, obs_horizon=obs_horizon, dim=256).to(device)
@@ -254,8 +254,8 @@ def evaluate_diffuser(model_path, norm_path, label_name, num_episodes=50, device
 if __name__ == '__main__':
     MODELS_TO_EVALUATE = {
         "Diffuser_CBF (PPOLag)": (
-            './diffuser_models/新的ppolag/unet_step_50000.pt', 
-            './diffuser_models/新的ppolag/normalization.npz'
+            './diffuser_models/cost10_safe/unet_step_50000.pt', 
+            './diffuser_models/cost10_safe/normalization.npz'
         )
     }
     
@@ -275,8 +275,8 @@ if __name__ == '__main__':
         df_summary['Reward (Mean ± Std)'] = df_summary.apply(lambda row: f"{row['Reward_Mean']:.2f} ± {row['Reward_Std']:.2f}", axis=1)
         df_summary['Cost (Mean ± Std)'] = df_summary.apply(lambda row: f"{row['Cost_Mean']:.2f} ± {row['Cost_Std']:.2f}", axis=1)
         
-        df_summary.to_csv('cbf_diffuser_eval_summarychange4.csv', index=False)
-        pd.DataFrame(all_details).to_csv('cbf_diffuser_eval_detailschange4.csv', index=False)
+        df_summary.to_csv('cbf_diffuser_eval_summary_cost10_safe.csv', index=False)
+        pd.DataFrame(all_details).to_csv('cbf_diffuser_eval_details_cost10_safe.csv', index=False)
         
         print("\n✅ CBF-Diffuser 模型评估完成！")
-        print("💾 最终结果已单独保存至: cbf_diffuser_eval_summarychange4.csv")
+        print("💾 最终结果已单独保存至: cbf_diffuser_eval_summary_cost10_safe.csv")

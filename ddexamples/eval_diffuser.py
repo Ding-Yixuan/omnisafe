@@ -210,7 +210,7 @@ class DiffusionSampler:
             else:
                 x = mean
             
-            # 🔥 Inpainting: 强制修正当前状态
+            # Inpainting: 强制修正当前状态
             x[:, 0, :self.obs_dim] = norm_start
 
         traj = self.unnormalize(x)

@@ -58,7 +58,7 @@ def patched_obs(self):
     x, y = vec[0], vec[1]
     z = x + 1j * y
     dist = np.abs(z)
-    # dist = np.exp(-dist) 
+    dist = np.exp(-dist) 
     angle = np.angle(z)
     # goal_vec = np.array([dist, np.cos(angle), np.sin(angle)])
     goal_vec = np.array([dist, x, y])
@@ -91,7 +91,7 @@ def find_actor(obj, depth=0):
 
 # ================= 配置区域 =================
 # 请确保这里指向你训练好的模型文件夹
-LOG_DIR = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-26-16-30-32'
+LOG_DIR = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-03-03-21-30-13'
 # runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-07-19-09-38
 # runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-09-17-49-50
 VIDEO_FILENAME = "./safe_navigation_26dim.mp4"

@@ -175,9 +175,9 @@ class DiffusionSampler:
 # =================================================================
 if __name__ == '__main__':
     # 配置你的新模型路径
-    MODEL_PATH = './diffuser_models/ppolag_exp_cond/unet_step_50000.pt'
-    NORM_PATH = './diffuser_models/ppolag_exp_cond/normalization.npz'
-    VIDEO_PATH = './diffuser_models/ppolag_exp_cond/diffuser_godview_rhc.mp4'
+    MODEL_PATH = './diffuser_models/cost3/unet_step_50000.pt'
+    NORM_PATH = './diffuser_models/cost3/normalization.npz'
+    VIDEO_PATH = './diffuser_models/cost3/diffuser_godview_rhc.mp4'
     
     device = 'cuda:0'
     obs_horizon = 2

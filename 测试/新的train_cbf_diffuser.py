@@ -8,12 +8,28 @@ import os
 from torch.utils.data import Dataset, DataLoader
 
 # =================================================================
-# 1. 配置参数 (🔥 修改: 引入 T_o 和 T_p，抛弃统一的 horizon)
+# 0. 引入 Action-Value CBF 网络结构
+# =================================================================
+class CBFNetwork(nn.Module):
+    def __init__(self, obs_dim, act_dim, hidden_dim=256): 
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(obs_dim + act_dim, hidden_dim), 
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+    def forward(self, x):
+        return self.net(x)
+
+# =================================================================
+# 1. 配置参数 (🔥 新增: CBF 和 拉格朗日超参数)
 # =================================================================
 CONFIG = {
     'dataset_path': './data_pro/ppolag_cost10_combined.npz',
-    'obs_horizon': 2,       # 👈 新增: 每次观测历史 2 步 (T_o)
-    'pred_horizon': 16,     # 👈 新增: 每次规划未来 16 步 (T_p)
+    'obs_horizon': 2,       
+    'pred_horizon': 16,     
     'obs_dim': 26,          
     'act_dim': 2,           
     'hidden_dim': 256,      
@@ -21,7 +37,16 @@ CONFIG = {
     'batch_size': 256,     
     'lr': 2e-4,             
     'device': 'cuda:0',     
-    'save_dir': './diffuser_models/cost10', # 建议换个新目录存新模型
+    'save_dir': './diffuser_models/cost10_safe', # 换个新名字
+    
+    # 🔥 新增: CBF 相关的路径
+    'cbf_model_path': './看cbf数据/混合数据集_ActionCBF/best_cbf_model.pt',
+    'cbf_norm_path': './看cbf数据/混合数据集_ActionCBF/cbf_normalization.npz',
+    
+    # 🔥 新增: 拉格朗日参数
+    'lambda_lr': 5e-4,       # lambda 的更新步长
+    'cbf_margin': 0.0,       # 安全裕度 (希望 cbf_val > 0.1)
+    'warmup_steps': 15000     # 👈 核心: 前 5000 步纯学动作，不加安全约束！
 }
 
 # =================================================================
@@ -155,13 +180,24 @@ class TemporalUnet(nn.Module):
         return x
 
 # =================================================================
-# 4. 扩散过程管理 (🔥 修改: 只对 action 加噪，透传 obs_cond)
+# 4. 扩散过程管理 (🔥 核心修改: 引入 CBF 计算梯度的 x_0 Trick)
 # =================================================================
 class GaussianDiffusion(nn.Module):
-    def __init__(self, model, n_timesteps=1000):
+    def __init__(self, model, cbf_model, c_mins, c_maxs, d_mins, d_maxs, n_timesteps=1000):
         super().__init__()
         self.model = model
         self.n_timesteps = n_timesteps
+        
+        # 冻结 CBF 模型，不更新它的梯度
+        self.cbf_model = cbf_model
+        for param in self.cbf_model.parameters():
+            param.requires_grad = False
+            
+        # 保存两套极值用于归一化转换
+        self.c_mins = c_mins
+        self.c_maxs = c_maxs
+        self.d_mins = d_mins
+        self.d_maxs = d_maxs
 
         betas = torch.linspace(1e-4, 2e-2, n_timesteps)
         alphas = 1. - betas
@@ -170,12 +206,10 @@ class GaussianDiffusion(nn.Module):
         self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod))
         self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1. - alphas_cumprod))
 
-    # 🔥 修改: 计算 Loss 时分离条件和目标
-    def compute_loss(self, obs_cond, act_target):
+    # 🔥 史诗级修改: 算 MSE 的同时，推演预测动作算 CBF 惩罚！
+    def compute_loss(self, obs_cond, act_target, lagrange_lambda, step):
         batch_size = act_target.shape[0]
         t = torch.randint(0, self.n_timesteps, (batch_size,), device=act_target.device).long()
-        
-        # 🔥 修改: 只对 action (act_target) 生成噪声
         noise = torch.randn_like(act_target)
         
         coef1 = self.sqrt_alphas_cumprod[t].reshape(-1, 1, 1)
@@ -183,34 +217,92 @@ class GaussianDiffusion(nn.Module):
         
         x_t = coef1 * act_target + coef2 * noise
         
+        # 1. U-Net 预测噪声
         x_t_in = x_t.permute(0, 2, 1) 
+        noise_pred = self.model(x_t_in, t, obs_cond).permute(0, 2, 1) 
         
-        # 🔥 修改: 把干净的 obs_cond 传给模型作为指导
-        noise_pred = self.model(x_t_in, t, obs_cond)
-        noise_pred = noise_pred.permute(0, 2, 1) 
+        # 基础损失: 预测噪声 vs 真实噪声
+        loss_mse = nn.functional.mse_loss(noise_pred, noise)
         
-        # 纯比较 action 维度的预测误差
-        return nn.functional.mse_loss(noise_pred, noise)
+        # 如果还在 Warm-up 阶段，直接返回 MSE，不搞惩罚
+        if step < CONFIG['warmup_steps']:
+            return loss_mse, 0.0, 0.0
+
+        # ==========================================
+        # 🔥 The x_0 Trick: 算出模型当前认为的“干净动作”
+        # 公式: x_0 = (x_t - sqrt(1-alpha_bar) * epsilon) / sqrt(alpha_bar)
+        # 绝对不能加 detach()，梯度就是通过 x_0_pred 流回 U-Net 的！
+        # ==========================================
+        x_0_pred = (x_t - coef2 * noise_pred) / coef1 
+        
+        # 我们只约束第一步的动作 [Batch, 2]
+        act_step0 = x_0_pred[:, 0, :] 
+        
+        # 拿到当前的观测状态 [Batch, 26] (取 obs_horizon 的最新一帧)
+        obs_curr = obs_cond[:, -1, :] 
+        
+        # --- 维度与归一化对齐大乱炖 ---
+        # 1. 先把 Diffuser [-1, 1] 的数值还原成物理世界的真实数值
+        obs_raw = (obs_curr + 1) / 2 * (self.d_maxs[:26] - self.d_mins[:26]) + self.d_mins[:26]
+        act_raw = (act_step0 + 1) / 2 * (self.d_maxs[26:] - self.d_mins[26:]) + self.d_mins[26:]
+        
+        # 2. 拼接成 28 维
+        raw_inputs = torch.cat([obs_raw, act_raw], dim=-1)
+        
+        # 3. 按照 CBF 的规矩，重新归一化到 [-5, 5]
+        cbf_inputs_norm = (raw_inputs - self.c_mins) / (self.c_maxs - self.c_mins)
+        cbf_inputs_norm = 2 * cbf_inputs_norm - 1
+        cbf_inputs_norm = torch.clamp(cbf_inputs_norm, -5.0, 5.0)
+        
+        # ==========================================
+        # 🔥 计算 CBF 安全分与拉格朗日违规项
+        # ==========================================
+        safety_scores = self.cbf_model(cbf_inputs_norm) # [Batch, 1]
+        
+        # 违规程度: 当 score < margin 时，产生正向惩罚；否则惩罚为 0
+        violation = torch.relu(CONFIG['cbf_margin'] - safety_scores)
+        
+        # 违规均值 (用于拉格朗日更新)
+        mean_violation = torch.mean(violation)
+        
+        # 最终拉格朗日 Loss 项
+        loss_cbf = lagrange_lambda * mean_violation
+        
+        loss_total = loss_mse + loss_cbf
+        
+        return loss_total, loss_cbf.item(), mean_violation.item()
 
 # =================================================================
-# 5. 主训练循环 (🔥 修改: 获取并传递解耦后的数据)
+# 5. 主训练循环 (🔥 新增: 拉格朗日参数 Dual Gradient Descent)
 # =================================================================
 def train():
     os.makedirs(CONFIG['save_dir'], exist_ok=True)
     device = torch.device(CONFIG['device'])
     
-    # 初始化 Dataset
+    # 1. 准备 Diffuser 数据集
     dataset = TrajectoryDataset(
         CONFIG['dataset_path'], 
         obs_horizon=CONFIG['obs_horizon'], 
         pred_horizon=CONFIG['pred_horizon']
     )
-    dataloader = DataLoader(dataset, batch_size=CONFIG['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
+    dataloader = DataLoader(dataset, batch_size=CONFIG['batch_size'], shuffle=True, drop_last=True)
     
+    # 获取 Diffuser 的极值
+    d_mins = torch.from_numpy(dataset.mins).float().to(device)
+    d_maxs = torch.from_numpy(dataset.maxs).float().to(device)
     np.savez(os.path.join(CONFIG['save_dir'], 'normalization.npz'), mins=dataset.mins, maxs=dataset.maxs)
-    print("✅ Normalization params saved.")
 
-    # 🔥 修改: U-Net 初始化参数更新
+    # 2. 🔥 加载预训练的 CBF 模型与它的极值
+    print("🔄 Loading pretrained Action-Value CBF...")
+    cbf_model = CBFNetwork(obs_dim=26, act_dim=2).to(device)
+    cbf_model.load_state_dict(torch.load(CONFIG['cbf_model_path'], map_location=device))
+    cbf_model.eval() # 锁死为推理模式
+    
+    cbf_norm_data = np.load(CONFIG['cbf_norm_path'])
+    c_mins = torch.from_numpy(cbf_norm_data['mins']).float().to(device)
+    c_maxs = torch.from_numpy(cbf_norm_data['maxs']).float().to(device)
+
+    # 3. 初始化 U-Net 和 扩散过程
     unet = TemporalUnet(
         act_dim=CONFIG['act_dim'], 
         obs_dim=CONFIG['obs_dim'], 
@@ -218,50 +310,75 @@ def train():
         dim=CONFIG['hidden_dim']
     ).to(device)
     
-    diffusion = GaussianDiffusion(unet).to(device)
+    diffusion = GaussianDiffusion(unet, cbf_model, c_mins, c_maxs, d_mins, d_maxs).to(device)
     optimizer = torch.optim.Adam(unet.parameters(), lr=CONFIG['lr'])
     
-    print(f"🚀 Start Training Conditioned Diffuser... Steps: {CONFIG['train_steps']}")
+    # 🔥 初始化拉格朗日乘子 (Lambda)
+    lagrange_lambda = 0.0
+    
+    print(f"🚀 Start Training Safe Conditioned Diffuser... Steps: {CONFIG['train_steps']}")
     
     step = 0
-    loss_history = []
+    history = {'total_loss': [], 'cbf_loss': [], 'lambda': [], 'violation': []}
     
     while step < CONFIG['train_steps']:
-        # 🔥 修改: 这里 unpack 出两个张量
         for obs_batch, act_batch in dataloader:
-            obs_batch = obs_batch.to(device) # [Batch, obs_horizon, obs_dim]
-            act_batch = act_batch.to(device) # [Batch, pred_horizon, act_dim]
+            obs_batch = obs_batch.to(device) 
+            act_batch = act_batch.to(device) 
             
-            # 🔥 修改: 传入观测和动作
-            loss = diffusion.compute_loss(obs_cond=obs_batch, act_target=act_batch)
+            # 🔥 传进 lambda 和 step，算出带约束的 Loss
+            loss_total, loss_cbf_item, mean_violation = diffusion.compute_loss(
+                obs_cond=obs_batch, 
+                act_target=act_batch,
+                lagrange_lambda=lagrange_lambda,
+                step=step
+            )
             
             optimizer.zero_grad()
-            loss.backward()
+            loss_total.backward()
+            torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
             optimizer.step()
             
+            # 🔥 拉格朗日对偶更新 (Dual Ascent): 违规越多，惩罚权重越大
+            if step >= CONFIG['warmup_steps']:
+                # lagrange_lambda = max(0.0, lagrange_lambda + CONFIG['lambda_lr'] * mean_violation)
+                # lagrange_lambda = min(2.0, max(0.0, lagrange_lambda * 0.999 + CONFIG['lambda_lr'] * mean_violation))
+                lagrange_lambda = min(5.0, max(0.0, lagrange_lambda * 0.999 + CONFIG['lambda_lr'] * mean_violation))
+            
             step += 1
-            loss_history.append(loss.item())
+            
+            # 记录数据
+            history['total_loss'].append(loss_total.item())
+            history['cbf_loss'].append(loss_cbf_item)
+            history['lambda'].append(lagrange_lambda)
+            history['violation'].append(mean_violation)
             
             if step % 100 == 0:
-                print(f"Step {step}/{CONFIG['train_steps']} | Loss: {loss.item():.6f}")
+                print(f"Step {step:5d} | Total: {loss_total.item():.4f} | CBF Loss: {loss_cbf_item:.4f} | Viol: {mean_violation:.4f} | Lambda: {lagrange_lambda:.4f}")
                 
             if step % 5000 == 0:
-                save_path = os.path.join(CONFIG['save_dir'], f'unet_step_{step}.pt')
-                torch.save(unet.state_dict(), save_path)
-                print(f"💾 Model saved to {save_path}")
+                torch.save(unet.state_dict(), os.path.join(CONFIG['save_dir'], f'unet_step_{step}.pt'))
                 
-                plt.figure()
-                plt.plot(loss_history)
-                plt.title("Conditional Diffusion Training Loss")
-                plt.xlabel("Steps")
-                plt.ylabel("MSE Loss")
-                plt.savefig(os.path.join(CONFIG['save_dir'], 'loss_curve.png'))
+                # 画两张图：Loss 图 和 Lambda-违规 监控图
+                plt.figure(figsize=(12, 4))
+                plt.subplot(1, 2, 1)
+                plt.plot(history['total_loss'], label='Total Loss', alpha=0.7)
+                plt.plot(history['cbf_loss'], label='CBF Loss', alpha=0.7)
+                plt.title("Training Losses")
+                plt.legend()
+                
+                plt.subplot(1, 2, 2)
+                plt.plot(history['lambda'], label='Lagrange Lambda', color='red')
+                plt.twinx()
+                plt.plot(history['violation'], label='Mean Violation', color='orange', alpha=0.5)
+                plt.title("Lambda vs Violation")
+                plt.savefig(os.path.join(CONFIG['save_dir'], 'safe_training_curve.png'))
                 plt.close()
                 
             if step >= CONFIG['train_steps']:
                 break
 
-    print("🎉 Training Finished!")
+    print("🎉 Safe Training Finished!")
 
 if __name__ == '__main__':
     train()

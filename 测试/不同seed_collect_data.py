@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import os
+import glob # 👈 仅新增这一个库用于自动查找文件夹
 import safety_gymnasium
 import gymnasium
 from safety_gymnasium.assets.geoms import Hazards
@@ -106,7 +107,8 @@ def calculate_ttc(env_task, agent_pos, agent_vel):
     return min_ttc
 
 # =================================================================
-# 2. 手动重建 PPO Agent (针对 'dict' 只有权重的情况)
+# 2. 手动重建 PPO Agent (针对 'dict' 只有权重的情况) 
+# 原汁原味保留了所有注释！
 # =================================================================
 class PPO_Inference_Agent(nn.Module):
     def __init__(self, obs_dim=26, act_dim=2, hidden_sizes=[64, 64]):
@@ -207,88 +209,124 @@ class PPO_Inference_Agent(nn.Module):
         return action.detach().numpy()
 
 # =================================================================
-# 3. 采集主程序
+# 3. 采集主程序 (保留了你的变量和 print 风格)
 # =================================================================
 def collect():
     # ================= 配置 =================
-    AGENT_PATH = './runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-03-03-21-30-13/torch_save/epoch-500.pt'
-    # runs/PPOLag-{SafetyPointGoal1-v0}/seed-000-2026-02-17-19-59-08
-    SAVE_PATH = './data_pro/ppolag_34.npz'
-    MAX_STEPS = 50000
-    TTC_THRESHOLD = 1.0  # 安全阈值1秒钟
+    BASE_DIR = './runs/PPOLag-{SafetyPointGoal1-v0}'
+    COST_LIMITS = [0]            # 你想采集的几个 limit
+    STEPS_PER_SEED = 50000                 # 🔥 每个 seed 采集的步数，原来是 MAX_STEPS = 50000
+    TTC_THRESHOLD = 1.0                    # 安全阈值1秒钟
+    SAVE_DIR = './data_pro'
     
-    # 1. 加载 Agent
-    print(f"🔄 手动组装 Agent from {AGENT_PATH}...")
-    ckpt = torch.load(AGENT_PATH, map_location='cpu')
-    agent = PPO_Inference_Agent(obs_dim=26, act_dim=2, hidden_sizes=[256, 256])
-    agent.load_from_dict(ckpt)
+    os.makedirs(SAVE_DIR, exist_ok=True)
     
     # 2. 创建环境
     env = safety_gymnasium.make('SafetyPointGoal1-v0')
     
-    # --- 初始化增强型 Buffer ---
-    dataset = {
-        'obs': [], 'act': [], 'next_obs': [], 'rew': [], 'env_cost': [], 
-        'done': [], 'ttc': [], 'is_safe': [], 'goal_pos': [], 
-        'agent_pos': [], 'segment_id': []
-    }
-    
-    current_segment = 0
-    total_steps = 0
-    o, _ = env.reset()
-    
-    print("🚀 Start collecting ENHANCED data (Code 1 Framework + Code 2 Content)...")
-    
-    while total_steps < MAX_STEPS:
-        # A. 获取当前 Raw Obs (代码 1 特有补丁)
-        raw_obs_numpy = env.task.obs() 
+    for cost in COST_LIMITS:
+        print(f"\n" + "="*50)
+        print(f"🎯 开始采集 CostLimit = {cost} 的数据")
+        print("="*50)
         
-        # B. 决策
-        action = agent.step(raw_obs_numpy)
-
-        # C. 执行环境步
-        next_o, reward, cost, done, trunc, info = env.step(action)
+        search_pattern = os.path.join(BASE_DIR, f"*costlimit{cost}_*")
+        matched_dirs = glob.glob(search_pattern)
         
-        # --- D. 物理信息提取 (集成自代码 2) ---
-        # 获取机器人和目标的实时物理位置
-        agent_pos = env.task.agent.pos[:2].copy()
-        agent_vel = env.task.agent.vel[:2].copy()
-        goal_pos = env.task.goal.pos[:2].copy()
+        if not matched_dirs:
+            print(f"⚠️ 找不到 CostLimit {cost} 的任何 seed 文件夹，跳过。")
+            continue
+            
+        # --- 初始化增强型 Buffer ---
+        dataset = {
+            'obs': [], 'act': [], 'next_obs': [], 'rew': [], 'env_cost': [], 
+            'done': [], 'ttc': [], 'is_safe': [], 'goal_pos': [], 
+            'agent_pos': [], 'segment_id': []
+        }
         
-        # 计算 TTC (直接在循环内调用计算逻辑)
-        ttc_val = calculate_ttc(env.task, agent_pos, agent_vel)
-        is_safe = 1 if ttc_val > TTC_THRESHOLD else 0
+        current_segment = 0
+        total_steps_for_this_limit = 0
         
-        # E. 存储到 Dataset
-        dataset['obs'].append(raw_obs_numpy)
-        dataset['act'].append(action)
-        dataset['next_obs'].append(next_o) # 环境标准的 next_obs
-        dataset['rew'].append(reward)
-        dataset['env_cost'].append(cost)
-        dataset['done'].append(done or trunc)
-        dataset['ttc'].append(ttc_val)
-        dataset['is_safe'].append(is_safe)
-        dataset['goal_pos'].append(goal_pos)
-        dataset['agent_pos'].append(agent_pos)
-        dataset['segment_id'].append(current_segment)
-        
-        total_steps += 1
-        if total_steps % 1000 == 0:
-            print(f"Collected {total_steps}/{MAX_STEPS} steps... TTC Mean: {np.mean(dataset['ttc'][-100:]):.2f}")
-
-        if done or trunc:
+        for log_dir in matched_dirs:
+            seed_name = os.path.basename(log_dir).split('-')[1] # 提取 "000" 等标识
+            print(f"\n▶️ 开始处理 Seed: {seed_name} (目录: {log_dir})")
+            
+            # 动态生成你原来的 AGENT_PATH
+            AGENT_PATH = os.path.join(log_dir, 'torch_save', 'epoch-500.pt')
+            if not os.path.exists(AGENT_PATH):
+                AGENT_PATH = os.path.join(log_dir, 'torch_save', 'model.pt')
+                if not os.path.exists(AGENT_PATH):
+                    print(f"   ⚠️ 找不到模型权重，跳过此 seed。")
+                    continue
+            
+            # 1. 加载 Agent
+            print(f"🔄 手动组装 Agent from {AGENT_PATH}...")
+            ckpt = torch.load(AGENT_PATH, map_location='cpu')
+            agent = PPO_Inference_Agent(obs_dim=26, act_dim=2, hidden_sizes=[256, 256])
+            agent.load_from_dict(ckpt)
+            
             o, _ = env.reset()
-            current_segment += 1
-        else:
-            o = next_o
+            seed_steps = 0
+            
+            print("🚀 Start collecting ENHANCED data (Code 1 Framework + Code 2 Content)...")
+            
+            while seed_steps < STEPS_PER_SEED:
+                # A. 获取当前 Raw Obs (代码 1 特有补丁)
+                raw_obs_numpy = env.task.obs() 
+                
+                # B. 决策
+                action = agent.step(raw_obs_numpy)
 
-    # F. 清洗并保存
-    print(f"💾 Saving ENHANCED data to {SAVE_PATH}...")
-    # 将列表转换为 Numpy 数组并压缩保存
-    final_data = {k: np.array(v) for k, v in dataset.items()}
-    np.savez_compressed(SAVE_PATH, **final_data)
-    print("🎉 Done!")
+                # C. 执行环境步
+                next_o, reward, cost_val, done, trunc, info = env.step(action)
+                
+                # --- D. 物理信息提取 (集成自代码 2) ---
+                # 获取机器人和目标的实时物理位置
+                agent_pos = env.task.agent.pos[:2].copy()
+                agent_vel = env.task.agent.vel[:2].copy()
+                goal_pos = env.task.goal.pos[:2].copy()
+                
+                # 计算 TTC (直接在循环内调用计算逻辑)
+                ttc_val = calculate_ttc(env.task, agent_pos, agent_vel)
+                is_safe = 1 if ttc_val > TTC_THRESHOLD else 0
+                
+                # E. 存储到 Dataset
+                dataset['obs'].append(raw_obs_numpy)
+                dataset['act'].append(action)
+                dataset['next_obs'].append(next_o) # 环境标准的 next_obs
+                dataset['rew'].append(reward)
+                dataset['env_cost'].append(cost_val)
+                dataset['done'].append(done or trunc)
+                dataset['ttc'].append(ttc_val)
+                dataset['is_safe'].append(is_safe)
+                dataset['goal_pos'].append(goal_pos)
+                dataset['agent_pos'].append(agent_pos)
+                dataset['segment_id'].append(current_segment)
+                
+                seed_steps += 1
+                total_steps_for_this_limit += 1
+                
+                if seed_steps % 1000 == 0:
+                    print(f"Collected {seed_steps}/{STEPS_PER_SEED} steps for current seed... TTC Mean: {np.mean(dataset['ttc'][-100:]):.2f}")
+
+                if done or trunc:
+                    o, _ = env.reset()
+                    current_segment += 1
+                else:
+                    o = next_o
+                    
+            # 当前 seed 采集完毕后，为下一个 seed 的起步做准备，防止跨界
+            current_segment += 1 
+
+        # F. 清洗并保存
+        if len(dataset['obs']) > 0:
+            SAVE_PATH = os.path.join(SAVE_DIR, f'ppolag_cost{cost}_combined.npz')
+            print(f"💾 Saving ENHANCED data to {SAVE_PATH}... (Total Steps: {total_steps_for_this_limit})")
+            # 将列表转换为 Numpy 数组并压缩保存
+            final_data = {k: np.array(v) for k, v in dataset.items()}
+            np.savez_compressed(SAVE_PATH, **final_data)
+            print("🎉 Done!")
 
 # 注意：你需要把代码 2 中的 calculate_ttc 函数复制到代码 1 中，放在 collect 函数上方。
+# （已经帮你放进去了！）
 if __name__ == '__main__':
     collect()

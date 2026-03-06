@@ -1,2 +1,2 @@
 Model,Episodes,Reward_Mean,Reward_Std,Cost_Mean,Cost_Std,Reward (Mean ± Std),Cost (Mean ± Std)
-PPOLag,50,13.774358,3.3523834,11.8,15.869467539901898,13.77 ± 3.35,11.80 ± 15.87
+PPOLag,50,12.781983,3.9983482,8.7,12.387493693237547,12.78 ± 4.00,8.70 ± 12.39
